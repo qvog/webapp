@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Polymarket Esports Terminal</title>
+    <style>
+        body { background-color: #0d1117; color: #c9d1d9; font-family: -apple-system, sans-serif; margin: 0; padding: 20px; }
+        .hidden { display: none !important; }
+        .container { max-width: 1000px; margin: 0 auto; }
+        
+        .filters { display: flex; gap: 10px; margin-bottom: 20px; }
+        .filter-btn { background-color: #21262d; border: 1px solid #30363d; color: #c9d1d9; padding: 8px 15px; border-radius: 6px; cursor: pointer; font-weight: 500;}
+        .filter-btn:hover { border-color: #8b949e; }
+        .filter-btn.active { border-color: #58a6ff; background-color: #1f2e4d; color: #58a6ff; }
+        
+        .card { background-color: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 20px; margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center; transition: 0.2s; }
+        .card:hover { border-color: #8b949e; }
+        
+        .live-badge { background-color: #da3633; color: white; padding: 3px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; margin-right: 10px;}
+        .game-badge { background-color: #1f2e4d; color: #58a6ff; padding: 3px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; border: 1px solid #58a6ff; margin-right: 10px; }
+        .btn-trade { background-color: #238636; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 14px; }
+        .btn-trade:hover:not(:disabled) { background-color: #2ea043; }
+        
+        .top-bar { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #30363d; padding-bottom: 15px; margin-bottom: 20px; }
+        .btn-back { background-color: transparent; color: #58a6ff; border: 1px solid #58a6ff; padding: 5px 15px; border-radius: 4px; cursor: pointer; font-weight: bold;}
+        
+        /* Layout Терминала */
+        .terminal-layout { display: flex; gap: 20px; }
+        .terminal-sidebar { width: 30%; display: flex; flex-direction: column; gap: 10px; }
+        .terminal-main { width: 70%; background-color: #161b22; border: 1px solid #30363d; padding: 20px; border-radius: 8px; }
+        
+        /* Список рынков в сайдбаре */
+        .submarket-btn { background-color: #0d1117; border: 1px solid #30363d; color: #8b949e; padding: 15px; border-radius: 6px; cursor: pointer; text-align: left; transition: 0.2s; }
+        .submarket-btn:hover { border-color: #8b949e; }
+        .submarket-btn.active { border-color: #58a6ff; background-color: #1f2e4d; color: #c9d1d9; border-left: 4px solid #58a6ff;}
+        .submarket-btn .sm-title { font-weight: bold; font-size: 14px; margin-bottom: 5px; color: #c9d1d9;}
+        .submarket-btn .sm-liq { font-size: 12px; color: #8b949e; }
+        
+        .quotes-box { display: flex; gap: 15px; margin-bottom: 20px; }
+        .quote-item { flex: 1; background-color: #0d1117; border: 1px solid #30363d; padding: 20px; border-radius: 8px; text-align: center; }
+        .price-green { color: #3fb950; font-size: 28px; font-weight: bold; }
+        .price-red { color: #f85149; font-size: 28px; font-weight: bold; }
+        .spread-safe { color: #3fb950; font-weight: bold; }
+        
+        .slider-container { margin-top: 20px; background-color: #0d1117; padding: 15px; border-radius: 8px; border: 1px solid #30363d;}
+        .strategies { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 20px; }
+        .strat-btn { background-color: #21262d; border: 1px solid #30363d; color: #c9d1d9; padding: 12px; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: bold; transition: 0.2s; }
+        .strat-btn:hover { border-color: #8b949e; }
+        .strat-btn.active { border-color: #58a6ff; background-color: #1f2e4d; }
+        
+        .calc-box { background-color: #0d1117; border: 1px solid #30363d; padding: 15px; border-radius: 8px; margin-top: 20px; }
+        .calc-row { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 15px; }
+        .btn-confirm { width: 100%; background-color: #238636; color: white; border: none; padding: 15px; border-radius: 8px; font-size: 18px; font-weight: bold; margin-top: 15px; cursor: pointer; }
+        
+        .btn-page { background-color: #21262d; color: #c9d1d9; border: 1px solid #30363d; padding: 8px 15px; border-radius: 6px; cursor: pointer; font-weight: bold; }
+        .btn-page:hover:not(:disabled) { border-color: #8b949e; }
+        .btn-page:disabled { opacity: 0.5; cursor: not-allowed; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div id="screen-catalog">
+        <h2 style="margin-bottom: 25px;">@INMY2</h2>
+        <div class="filters">
+            <button class="filter-btn">Все игры</button>
+            <button class="filter-btn active">Dota 2</button> 
+            <button class="filter-btn">CS2</button>
+            <button class="filter-btn">LoL</button>
+        </div>
+        
+        <div id="matches-list">
+            <div style="color: #8b949e; padding: 20px 0;">Загрузка данных с Polymarket...</div>
+        </div>
+
+        <div id="pagination-controls" class="hidden" style="display: flex; justify-content: space-between; align-items: center; margin-top: 20px;">
+            <button id="btn-prev" class="btn-page" onclick="changePage(-1)">← Назад</button>
+            <span id="page-info" style="color: #8b949e; font-weight: bold;">Страница 1 из 1</span>
+            <button id="btn-next" class="btn-page" onclick="changePage(1)">Вперед →</button>
+        </div>
+    </div>
+
+    <div id="screen-terminal" class="hidden">
+        <div class="top-bar">
+            <button class="btn-back" onclick="closeTerminal()">← Назад к турнирам</button>
+            <h3 id="event-main-title" style="margin: 0; color: #c9d1d9; font-size: 18px;">Матч загружается...</h3>
+        </div>
+        
+        <div class="terminal-layout">
+            <div class="terminal-sidebar" id="submarkets-sidebar">
+                </div>
+
+            <div class="terminal-main">
+                <div style="text-align: center; margin-bottom: 20px; font-size: 15px; color: #8b949e;">
+                    <span id="current-market-title" style="color: #c9d1d9; font-weight: bold; display: block; margin-bottom: 10px; font-size: 18px;">Выберите рынок слева</span>
+                    Спред: <span id="spread-value">Ожидание выбора...</span>
+                </div>
+
+                <div class="quotes-box">
+                    <div class="quote-item">
+                        <div id="out1-name" style="color: #c9d1d9; margin-bottom: 10px; font-weight: bold; font-size: 16px;">Команда 1</div>
+                        <div style="color: #8b949e; font-size: 13px;">Цена за акцию:<br><span class="price-green" style="display: block; margin-top: 8px;">-</span></div>
+                    </div>
+                    <div class="quote-item">
+                        <div id="out2-name" style="color: #c9d1d9; margin-bottom: 10px; font-weight: bold; font-size: 16px;">Команда 2</div>
+                        <div style="color: #8b949e; font-size: 13px;">Цена за акцию:<br><span class="price-red" style="display: block; margin-top: 8px;">-</span></div>
+                    </div>
+                </div>
+
+                <div class="slider-container">
+                    <label>Размер позиции: <strong id="bankroll-val">100</strong> USDC</label>
+                    <input type="range" id="bankroll-slider" min="10" max="1000" step="10" value="100" style="width: 100%; margin-top: 15px;" oninput="updateBankroll()">
+                </div>
+
+                <div class="strategies">
+                    <button class="strat-btn" onclick="selectStrategy('draft', 0.025, this)">ДРАФТ [2.5%]</button>
+                    <button class="strat-btn" onclick="selectStrategy('match', 0.05, this)">ИСХОД [5%]</button>
+                    <button class="strat-btn" onclick="selectStrategy('roshan', 0.015, this)">РОШАН [1.5%]</button>
+                    <button class="strat-btn" onclick="selectStrategy('sure', 0.20, this)">ВЕРНЯК [20%]</button>
+                </div>
+
+                <div id="calculator" class="calc-box hidden">
+                    <div class="calc-row"><span>Вход (USDC):</span> <strong id="calc-size">-</strong></div>
+                    <div class="calc-row"><span>Акции YES:</span> <strong id="calc-shares">-</strong></div>
+                    <div class="calc-row" style="color: #58a6ff; margin-top: 10px;"><span>Тейк-профит (Выход):</span> <strong id="calc-tp">-</strong></div>
+                    <div class="calc-row" style="color: #f85149;"><span>Стоп-лосс (Сброс):</span> <strong id="calc-sl">-</strong></div>
+                    <button class="btn-confirm" onclick="confirmOrder()">ОТПРАВИТЬ ОРДЕР НА БИРЖУ</button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    let marketWs = null;
+    let currentAsk = 0; 
+    let activeRisk = 0;
+    let activeStrat = "";
+    let allMatches = [];
+    
+    let currentPage = 1;
+    const itemsPerPage = 8;
+    
+    let currentEventObj = null;
+
+    // 1. Открытие Терминала (Загрузка события и списка рынков)
+    function openEventTerminal(eventId) {
+        currentEventObj = allMatches.find(e => e.event_id === eventId);
+        if (!currentEventObj) return;
+
+        document.getElementById('screen-catalog').classList.add('hidden');
+        document.getElementById('screen-terminal').classList.remove('hidden');
+        
+        document.getElementById('event-main-title').innerText = currentEventObj.title;
+        
+        // Рендерим сайдбар с рынками (Карта 1, Карта 2 и тд)
+        const sidebar = document.getElementById('submarkets-sidebar');
+        sidebar.innerHTML = '';
+        
+        currentEventObj.sub_markets.forEach((sub, index) => {
+            let cleanLabel = sub.question;
+            if (cleanLabel.toLowerCase().includes("map 1")) cleanLabel = "Карта 1 (Победитель)";
+            else if (cleanLabel.toLowerCase().includes("map 2")) cleanLabel = "Карта 2 (Победитель)";
+            else if (cleanLabel.toLowerCase().includes("map 3")) cleanLabel = "Карта 3 (Победитель)";
+            else if (cleanLabel.toLowerCase().includes("winner of the match") || cleanLabel.toLowerCase().includes("match winner")) cleanLabel = "Исход матча (BO3)";
+
+            const liqFormatted = sub.liquidity ? '$' + Math.round(sub.liquidity).toLocaleString('en-US') : '$0';
+            
+            // Если рынок мертв, делаем кнопку неактивной
+            let disabledStyle = (sub.status === 'FINISHED' || sub.status === 'EMPTY') ? 'opacity: 0.4; cursor: not-allowed;' : '';
+
+            sidebar.innerHTML += `
+                <div class="submarket-btn" id="subbtn-${sub.condition_id}" style="${disabledStyle}" onclick="if('${sub.status}' !== 'FINISHED' && '${sub.status}' !== 'EMPTY') connectToMarket('${sub.condition_id}')">
+                    <div class="sm-title">${cleanLabel}</div>
+                    <div class="sm-liq">Пул: ${liqFormatted}</div>
+                </div>
+            `;
+        });
+        
+        // Сбрасываем UI стакана
+        resetTerminalUI();
+        
+        // Автоматически подключаемся к первому живому рынку
+        const firstLive = currentEventObj.sub_markets.find(s => s.status === 'LIVE');
+        if (firstLive) {
+            connectToMarket(firstLive.condition_id);
+        }
+    }
+
+    // 2. Подключение к конкретному стакану (Вебсокет)
+    function connectToMarket(conditionId) {
+        if (!currentEventObj) return;
+        
+        const sub = currentEventObj.sub_markets.find(m => m.condition_id === conditionId);
+        if (!sub) return;
+
+        // Выделяем активную кнопку в сайдбаре
+        document.querySelectorAll('.submarket-btn').forEach(btn => btn.classList.remove('active'));
+        document.getElementById(`subbtn-${conditionId}`).classList.add('active');
+
+        // Подставляем данные в стакан
+        document.getElementById('current-market-title').innerText = sub.question;
+        document.getElementById('out1-name').innerText = sub.out1;
+        document.getElementById('out2-name').innerText = sub.out2;
+        document.getElementById('spread-value').innerText = "Соединение с ядром...";
+        
+        if (marketWs) marketWs.close();
+        
+        marketWs = new WebSocket(`ws://${window.location.host}/ws/market/${conditionId}`);
+        
+        marketWs.onmessage = function(event) {
+            const data = JSON.parse(event.data);
+            if (data.type === "orderbook_update") {
+                const bid = Math.round(data.bid * 100);
+                const ask = Math.round(data.ask * 100);
+                
+                const priceOut1 = ask; 
+                const priceOut2 = 100 - bid;
+                currentAsk = priceOut1; 
+                
+                document.querySelector('.price-green').innerText = priceOut1 > 0 ? priceOut1 + '¢' : '-';
+                document.querySelector('.price-red').innerText = (priceOut2 > 0 && priceOut2 < 100) ? priceOut2 + '¢' : '-';
+                
+                const spreadEl = document.getElementById('spread-value');
+                if (ask === 0 && bid === 0) {
+                    spreadEl.innerHTML = `<span style="color:#8b949e;">Рынок пуст (Нет ликвидности)</span>`;
+                } else {
+                    const spread = ask - bid;
+                    if (spread <= 2 && spread >= 0) {
+                        spreadEl.innerHTML = `<span class="spread-safe">${spread}¢ (Спред безопасен)</span>`;
+                    } else {
+                        spreadEl.innerHTML = `<span style="color:#da3633; font-weight:bold;">${spread}¢ (Риск проскальзывания)</span>`;
+                    }
+                }
+                
+                if (activeRisk > 0) recalculate();
+            }
+        };
+        
+        marketWs.onerror = function() {
+            document.getElementById('spread-value').innerText = "Ошибка трансляции";
+        };
+    }
+
+    function resetTerminalUI() {
+        document.getElementById('current-market-title').innerText = "Выберите рынок слева";
+        document.getElementById('out1-name').innerText = "Команда 1";
+        document.getElementById('out2-name').innerText = "Команда 2";
+        document.querySelector('.price-green').innerText = '-';
+        document.querySelector('.price-red').innerText = '-';
+        document.getElementById('spread-value').innerText = 'Ожидание выбора...';
+        document.getElementById('calculator').classList.add('hidden');
+        document.querySelectorAll('.strat-btn').forEach(btn => btn.classList.remove('active'));
+        currentAsk = 0;
+        activeRisk = 0;
+    }
+
+    function closeTerminal() {
+        if (marketWs) {
+            marketWs.close();
+            marketWs = null;
+        }
+        currentEventObj = null;
+        document.getElementById('screen-terminal').classList.add('hidden');
+        document.getElementById('screen-catalog').classList.remove('hidden');
+    }
+
+    // --- Калькулятор и Загрузка ---
+    function updateBankroll() {
+        const val = document.getElementById('bankroll-slider').value;
+        document.getElementById('bankroll-val').innerText = val;
+        if (activeRisk > 0) recalculate();
+    }
+
+    function selectStrategy(type, riskPct, btnElement) {
+        document.querySelectorAll('.strat-btn').forEach(btn => btn.classList.remove('active'));
+        btnElement.classList.add('active');
+        activeRisk = riskPct;
+        activeStrat = type;
+        document.getElementById('calculator').classList.remove('hidden');
+        recalculate();
+    }
+
+    function recalculate() {
+        if (currentAsk === 0) return;
+        const bankroll = parseInt(document.getElementById('bankroll-slider').value);
+        const size = (bankroll * activeRisk).toFixed(2);
+        const shares = Math.floor((size / (currentAsk / 100)));
+        
+        document.getElementById('calc-size').innerText = size + " USDC";
+        document.getElementById('calc-shares').innerText = shares + " акций";
+
+        let tp = "Ручной выход";
+        let sl = "Ручной выход";
+
+        if (activeStrat === 'draft') {
+            tp = (currentAsk + 8) + "¢";
+            sl = (currentAsk - 8) + "¢";
+        } else if (activeStrat === 'roshan') {
+            tp = (currentAsk + 6) + "¢";
+            sl = (currentAsk - 6) + "¢";
+        }
+
+        document.getElementById('calc-tp').innerText = tp;
+        document.getElementById('calc-sl').innerText = sl;
+    }
+
+    function confirmOrder() { alert("Ордер отправлен в ядро Полимаркета!"); }
+
+    async function loadMarkets(gameFilter = 'Dota 2') {
+        const listDiv = document.getElementById('matches-list');
+        const pagControls = document.getElementById('pagination-controls');
+        listDiv.innerHTML = `<div style="color: #8b949e; padding: 20px 0; text-align: center;">Анализ рынков ${gameFilter}...</div>`;
+        pagControls.classList.add('hidden');
+        try {
+            const response = await fetch(`/api/markets?game=${encodeURIComponent(gameFilter)}`);
+            const data = await response.json();
+            if (data.matches && data.matches.length > 0) {
+                allMatches = data.matches;
+                currentPage = 1; 
+                renderMatches(allMatches); 
+            } else {
+                listDiv.innerHTML = `<div style="color: #f85149;">Матчей по категории "${gameFilter}" сейчас нет.</div>`;
+            }
+        } catch (error) {
+            listDiv.innerHTML = `<div style="color: #f85149;">Ошибка соединения с сервером.</div>`;
+        }
+    }
+
+    function changePage(direction) {
+        const totalPages = Math.ceil(allMatches.length / itemsPerPage);
+        currentPage += direction;
+        if (currentPage < 1) currentPage = 1;
+        if (currentPage > totalPages) currentPage = totalPages;
+        renderMatches(allMatches);
+    }
+
+    // 🎯 НОВЫЙ ЧИСТЫЙ РЕНДЕР КАТАЛОГА (Только главные события)
+    function renderMatches(matchesArray) {
+        const listDiv = document.getElementById('matches-list');
+        const pagControls = document.getElementById('pagination-controls');
+        listDiv.innerHTML = '';
+
+        if (matchesArray.length === 0) {
+            pagControls.classList.add('hidden');
+            return;
+        }
+
+        const totalPages = Math.ceil(matchesArray.length / itemsPerPage);
+        const startIndex = (currentPage - 1) * itemsPerPage;
+        const endIndex = startIndex + itemsPerPage;
+        const currentSlice = matchesArray.slice(startIndex, endIndex);
+
+        currentSlice.forEach(eventItem => {
+            let statusHtml = '';
+            let cardOpacity = '1';
+            let btnHtml = `<button class="btn-trade" onclick="openEventTerminal('${eventItem.event_id}')">GO</button>`;
+            
+            if (eventItem.status === 'LIVE') {
+                statusHtml = '<span class="live-badge">LIVE</span>';
+            } else if (eventItem.status === 'FINISHED') {
+                statusHtml = '<span style="background-color: #30363d; color: #8b949e; padding: 3px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; margin-right: 10px;">ЗАВЕРШЕН</span>';
+                cardOpacity = '0.5';
+                btnHtml = `<button class="btn-trade" style="background-color: #21262d; color: #8b949e; cursor: pointer;" onclick="openEventTerminal('${eventItem.event_id}')">Смотреть</button>`;
+            } else if (eventItem.status === 'EMPTY') {
+                statusHtml = '<span style="background-color: #30363d; color: #8b949e; padding: 3px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; margin-right: 10px;">ПУСТОЙ</span>';
+                cardOpacity = '0.5';
+            } else {
+                statusHtml = '<span style="color: #8b949e; font-size: 12px; font-weight: bold; margin-right: 10px;">ОЖИДАЕТСЯ</span>';
+            }
+
+            const totalLiqFormatted = eventItem.total_liquidity ? '$' + Math.round(eventItem.total_liquidity).toLocaleString('en-US') : '$0';
+            const marketsCount = eventItem.sub_markets.length;
+
+            const cardHtml = `
+                <div class="card" style="opacity: ${cardOpacity};">
+                    <div>
+                        <div style="margin-bottom: 12px;">
+                            <span class="game-badge">${eventItem.game}</span> ${statusHtml}
+                        </div>
+                        <span style="font-weight: bold; font-size: 20px; color: #c9d1d9;">${eventItem.title}</span>
+                        <div style="color: #8b949e; font-size: 14px; margin-top: 8px;">
+                            Пул ликвидности: <span style="color: #58a6ff; font-weight:bold;">${totalLiqFormatted}</span> &nbsp;|&nbsp; Открыто рынков: <span style="color: #c9d1d9;">${marketsCount}</span>
+                        </div>
+                    </div>
+                    <div>
+                        ${btnHtml}
+                    </div>
+                </div>
+            `;
+            listDiv.innerHTML += cardHtml;
+        });
+
+        if (totalPages > 1) {
+            pagControls.classList.remove('hidden');
+            document.getElementById('page-info').innerText = `Страница ${currentPage} из ${totalPages}`;
+            document.getElementById('btn-prev').disabled = currentPage === 1;
+            document.getElementById('btn-next').disabled = currentPage === totalPages;
+        } else {
+            pagControls.classList.add('hidden');
+        }
+    }
+
+    document.querySelectorAll('.filter-btn').forEach(btn => {
+        btn.addEventListener('click', function() {
+            if (this.classList.contains('active')) return;
+            document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+            this.classList.add('active');
+            loadMarkets(this.innerText);
+        });
+    });
+
+    window.onload = () => loadMarkets('Dota 2');
+</script>
+</body>
+</html>
