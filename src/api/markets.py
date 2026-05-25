@@ -27,7 +27,7 @@ async def get_markets(game: str = Query("Dota 2")):
         
         print(f"⏳ [РАДАР] Интеллектуальная группировка событий по категории: {game}...")
         
-        events_dict = {} # Словарь для группировки рынков внутри матчей
+        events_dict = {}
         
         async with AsyncSession(impersonate="chrome110") as session:
             tasks = []
@@ -49,6 +49,9 @@ async def get_markets(game: str = Query("Dota 2")):
                     event_id = event.get("id")
                     title = event.get("title", "")
                     
+                    # 🎯 ВЫТАСКИВАЕМ ВРЕМЯ НАЧАЛА МАТЧА
+                    start_date = event.get("startDate") or event.get("endDate") or ""
+                    
                     tags = event.get("tags", [])
                     tag_slugs = [str(t.get("slug", "")).lower() for t in tags]
                     
@@ -58,21 +61,18 @@ async def get_markets(game: str = Query("Dota 2")):
                     elif "valorant" in tag_slugs: game_category = "Valorant"
                     else: game_category = get_game_category(title)
                     
-                    if game != "Все игры" and game_category != game:
-                        continue
-                    if game_category == "Other Esports" and "esports" not in tag_slugs:
-                        continue
+                    if game != "Все игры" and game_category != game: continue
+                    if game_category == "Other Esports" and "esports" not in tag_slugs: continue
                         
                     markets = event.get("markets", [])
-                    if not markets:
-                        continue
+                    if not markets: continue
                         
-                    # Создаем контейнер матча, если видим его впервые
                     if event_id not in events_dict:
                         events_dict[event_id] = {
                             "event_id": event_id,
                             "title": title,
                             "game": game_category,
+                            "start_date": start_date, # Передаем дату на фронт
                             "status": "EMPTY", 
                             "total_liquidity": 0.0,
                             "sub_markets": []
@@ -81,9 +81,7 @@ async def get_markets(game: str = Query("Dota 2")):
                     for market in markets:
                         market_id = market.get("id")
                         
-                        # Предотвращаем дублирование подрынков
-                        if any(m["market_id"] == market_id for m in events_dict[event_id]["sub_markets"]):
-                            continue
+                        if any(m["market_id"] == market_id for m in events_dict[event_id]["sub_markets"]): continue
                             
                         market_question = market.get("question", title)
                         
@@ -102,8 +100,7 @@ async def get_markets(game: str = Query("Dota 2")):
                             except: clob_token_ids = []
                         else: clob_token_ids = raw_tokens
                             
-                        if not clob_token_ids or len(clob_token_ids) == 0:
-                            continue
+                        if not clob_token_ids or len(clob_token_ids) == 0: continue
                             
                         target_token = clob_token_ids[0]
                         liquidity = float(market.get("liquidity", 0))
@@ -117,27 +114,18 @@ async def get_markets(game: str = Query("Dota 2")):
                         current_price = float(outcome_prices[0]) if outcome_prices and len(outcome_prices) > 0 else 0.5
                         
                         if event.get("active") and market.get("active"):
-                            if current_price >= 0.95 or current_price <= 0.05:
-                                m_status = "FINISHED" 
-                            elif liquidity > 0 or volume > 0:
-                                m_status = "LIVE"
-                            else:
-                                m_status = "EMPTY"
+                            if current_price >= 0.95 or current_price <= 0.05: m_status = "FINISHED" 
+                            elif liquidity > 0 or volume > 0: m_status = "LIVE"
+                            else: m_status = "EMPTY"
                         else:
-                            status = "UPCOMING"
                             m_status = "UPCOMING"
                         
-                        # Суммируем деньги в общий пул матча
                         events_dict[event_id]["total_liquidity"] += liquidity
                         
-                        # Апгрейдим статус всего события (если хоть одна карта LIVE — весь матч горит как LIVE)
                         current_ev_status = events_dict[event_id]["status"]
-                        if m_status == "LIVE" or current_ev_status == "EMPTY":
-                            events_dict[event_id]["status"] = m_status
-                        elif m_status == "UPCOMING" and current_ev_status == "FINISHED":
-                            events_dict[event_id]["status"] = m_status
+                        if m_status == "LIVE" or current_ev_status == "EMPTY": events_dict[event_id]["status"] = m_status
+                        elif m_status == "UPCOMING" and current_ev_status == "FINISHED": events_dict[event_id]["status"] = m_status
 
-                        # Складываем карту в коробку матча
                         events_dict[event_id]["sub_markets"].append({
                             "market_id": market_id,
                             "condition_id": target_token,
@@ -149,10 +137,9 @@ async def get_markets(game: str = Query("Dota 2")):
                             "out2": out2
                         })
 
-        # Выбрасываем матчи без активных линий
         final_events = [e for e in events_dict.values() if e["sub_markets"]]
         
-        # Сортировка матчей: LIVE -> UPCOMING -> FINISHED -> EMPTY (по деньгам пула)
+        # Базовая сортировка (фронтенд будет её переопределять)
         final_events.sort(key=lambda x: (
             0 if x["status"] == "LIVE" else (1 if x["status"] == "UPCOMING" else (2 if x["status"] == "FINISHED" else 3)),
             -x["total_liquidity"]
@@ -161,5 +148,5 @@ async def get_markets(game: str = Query("Dota 2")):
         return {"matches": final_events}
         
     except Exception as e:
-        print(f"❌ Критическая ошибка в группировке: {e}")
+        print(f"❌ Критическая ошибка: {e}")
         return {"error": str(e)}
