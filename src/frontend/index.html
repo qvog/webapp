@@ -8,7 +8,6 @@
         .hidden { display: none !important; }
         .container { max-width: 1000px; margin: 0 auto; }
         
-        /* Фильтры и сортировка */
         .filters-container { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
         .filters { display: flex; gap: 10px; }
         .filter-btn { background-color: #21262d; border: 1px solid #30363d; color: #c9d1d9; padding: 8px 15px; border-radius: 6px; cursor: pointer; font-weight: 500;}
@@ -22,7 +21,7 @@
         
         .live-badge { background-color: #da3633; color: white; padding: 3px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; margin-right: 10px;}
         .game-badge { background-color: #1f2e4d; color: #58a6ff; padding: 3px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; border: 1px solid #58a6ff; margin-right: 10px; }
-        .time-badge { background-color: #21262d; color: #8b949e; padding: 3px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; border: 1px solid #30363d; margin-right: 10px; }
+        .time-badge { background-color: #21262d; color: #c9d1d9; padding: 3px 8px; border-radius: 4px; font-size: 13px; font-weight: bold; border: 1px solid #30363d; margin-right: 10px; }
         
         .btn-trade { background-color: #238636; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 14px; }
         .btn-trade:hover:not(:disabled) { background-color: #2ea043; }
@@ -38,9 +37,8 @@
         .submarket-btn:hover { border-color: #8b949e; }
         .submarket-btn.active { border-color: #58a6ff; background-color: #1f2e4d; color: #c9d1d9; border-left: 4px solid #58a6ff;}
         .submarket-btn .sm-title { font-weight: bold; font-size: 14px; margin-bottom: 5px; color: #c9d1d9;}
-        .submarket-btn .sm-liq { font-size: 12px; color: #8b949e; }
+        .submarket-btn .sm-vol { font-size: 12px; color: #8b949e; }
         
-        /* КЛИКАБЕЛЬНЫЕ КАРТОЧКИ КОМАНД */
         .quotes-box { display: flex; gap: 15px; margin-bottom: 20px; }
         .quote-item { flex: 1; background-color: #0d1117; border: 1px solid #30363d; padding: 20px; border-radius: 8px; text-align: center; cursor: pointer; transition: 0.2s; }
         .quote-item:hover { border-color: #8b949e; }
@@ -80,7 +78,7 @@
             </div>
             
             <select id="sort-select" class="sort-select" onchange="changeSort(this.value)">
-                <option value="liquidity">Сначала популярные (По пулу)</option>
+                <option value="volume">Сначала популярные (По объему)</option>
                 <option value="date">Сначала ближайшие (По времени)</option>
             </select>
         </div>
@@ -150,43 +148,45 @@
     let marketWs = null;
     let allMatches = [];
     
-    // Переменные терминала
     let activeTeam = 1; 
     let priceOut1 = 0;
     let priceOut2 = 0;
     let activeRisk = 0;
     let activeStrat = "";
     
-    // Переменные списка
-    let currentSort = 'liquidity';
+    let currentSort = 'volume';
     let currentPage = 1;
     const itemsPerPage = 8;
+    
     let currentEventObj = null;
+    let currentSubMarket = null; 
 
-    // --- ФОРМАТИРОВАНИЕ ВРЕМЕНИ ---
+    function formatVolume(val) {
+        if (!val || val === 0) return '$0';
+        if (val >= 1000) return '$' + (val / 1000).toFixed(2) + 'K';
+        return '$' + Math.round(val);
+    }
+
+    // 🎯 ИСПРАВЛЕННЫЙ ПАРСЕР ВРЕМЕНИ ДЛЯ СТАТУСОВ
     function formatEventTime(dateStr) {
-        if (!dateStr) return null;
+        if (!dateStr) return 'ОЖИДАЕТСЯ';
         const d = new Date(dateStr);
+        if (isNaN(d.getTime())) return 'ОЖИДАЕТСЯ';
+
         const now = new Date();
-        
-        if (d < now) return 'LIVE'; // Если время уже наступило
+        // Если системное время ПК больше времени начала - матч 100% идет в LIVE
+        if (d <= now) return 'LIVE'; 
         
         const timeStr = d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const targetDate = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+        const diffDays = Math.round((targetDate - today) / (1000 * 60 * 60 * 24));
         
-        if (d.getDate() === now.getDate() && d.getMonth() === now.getMonth()) {
-            return `Сегодня, ${timeStr}`;
-        }
-        
-        const tomorrow = new Date(now);
-        tomorrow.setDate(tomorrow.getDate() + 1);
-        if (d.getDate() === tomorrow.getDate() && d.getMonth() === tomorrow.getMonth()) {
-            return `Завтра, ${timeStr}`;
-        }
-        
+        if (diffDays === 0) return `Сегодня, ${timeStr}`;
+        if (diffDays === 1) return `Завтра, ${timeStr}`;
         return d.toLocaleDateString('ru-RU', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
     }
 
-    // --- ЛОГИКА ТЕРМИНАЛА ---
     function openEventTerminal(eventId) {
         currentEventObj = allMatches.find(e => e.event_id === eventId);
         if (!currentEventObj) return;
@@ -203,37 +203,34 @@
             if (cleanLabel.toLowerCase().includes("map 1")) cleanLabel = "Карта 1 (Победитель)";
             else if (cleanLabel.toLowerCase().includes("map 2")) cleanLabel = "Карта 2 (Победитель)";
             else if (cleanLabel.toLowerCase().includes("map 3")) cleanLabel = "Карта 3 (Победитель)";
-            else if (cleanLabel.toLowerCase().includes("winner of the match") || cleanLabel.toLowerCase().includes("match winner")) cleanLabel = "Исход матча (BO3)";
+            else if (cleanLabel.toLowerCase().includes("winner of the match") || cleanLabel.toLowerCase().includes("match winner")) cleanLabel = "Исход матча (Moneyline)";
 
-            const liqFormatted = sub.liquidity ? '$' + Math.round(sub.liquidity).toLocaleString('en-US') : '$0';
-            let disabledStyle = (sub.status === 'FINISHED' || sub.status === 'EMPTY') ? 'opacity: 0.4; cursor: not-allowed;' : '';
-
+            const volFormatted = formatVolume(sub.volume);
             sidebar.innerHTML += `
-                <div class="submarket-btn" id="subbtn-${sub.condition_id}" style="${disabledStyle}" onclick="if('${sub.status}' !== 'FINISHED' && '${sub.status}' !== 'EMPTY') connectToMarket('${sub.condition_id}')">
+                <div class="submarket-btn" id="subbtn-${sub.condition_id}" onclick="connectToMarket('${sub.condition_id}')">
                     <div class="sm-title">${cleanLabel}</div>
-                    <div class="sm-liq">Пул: ${liqFormatted}</div>
+                    <div class="sm-vol">Объем: ${volFormatted}</div>
                 </div>
             `;
         });
         
         resetTerminalUI();
-        
-        const firstLive = currentEventObj.sub_markets.find(s => s.status === 'LIVE' || s.status === 'UPCOMING');
-        if (firstLive) connectToMarket(firstLive.condition_id);
+        if (currentEventObj.sub_markets.length > 0) connectToMarket(currentEventObj.sub_markets[0].condition_id);
     }
 
     function connectToMarket(conditionId) {
         if (!currentEventObj) return;
-        const sub = currentEventObj.sub_markets.find(m => m.condition_id === conditionId);
-        if (!sub) return;
+        currentSubMarket = currentEventObj.sub_markets.find(m => m.condition_id === conditionId);
+        if (!currentSubMarket) return;
 
         document.querySelectorAll('.submarket-btn').forEach(btn => btn.classList.remove('active'));
-        document.getElementById(`subbtn-${conditionId}`).classList.add('active');
+        const activeBtn = document.getElementById(`subbtn-${conditionId}`);
+        if (activeBtn) activeBtn.classList.add('active');
 
-        document.getElementById('current-market-title').innerText = sub.question;
-        document.getElementById('out1-name').innerText = sub.out1;
-        document.getElementById('out2-name').innerText = sub.out2;
-        document.getElementById('spread-value').innerText = "Соединение с ядром...";
+        document.getElementById('current-market-title').innerText = currentSubMarket.question;
+        document.getElementById('out1-name').innerText = currentSubMarket.out1;
+        document.getElementById('out2-name').innerText = currentSubMarket.out2;
+        document.getElementById('spread-value').innerText = "Содержимое стакана...";
         
         if (marketWs) marketWs.close();
         marketWs = new WebSocket(`ws://${window.location.host}/ws/market/${conditionId}`);
@@ -244,7 +241,6 @@
                 const bid = Math.round(data.bid * 100);
                 const ask = Math.round(data.ask * 100);
                 
-                // Сохраняем цены ОБЕИХ команд глобально
                 priceOut1 = ask; 
                 priceOut2 = 100 - bid;
                 
@@ -268,7 +264,6 @@
         };
     }
 
-    // 🎯 ВЫБОР КОМАНДЫ (Клик по карточке)
     function selectTeam(teamId) {
         activeTeam = teamId;
         document.getElementById('quote-1').classList.remove('selected');
@@ -286,16 +281,13 @@
         document.getElementById('spread-value').innerText = 'Ожидание выбора...';
         document.getElementById('calculator').classList.add('hidden');
         document.querySelectorAll('.strat-btn').forEach(btn => btn.classList.remove('active'));
-        
-        selectTeam(1); // По умолчанию выбрана первая команда
-        priceOut1 = 0;
-        priceOut2 = 0;
-        activeRisk = 0;
+        selectTeam(1);
+        priceOut1 = 0; priceOut2 = 0; activeRisk = 0;
     }
 
     function closeTerminal() {
         if (marketWs) { marketWs.close(); marketWs = null; }
-        currentEventObj = null;
+        currentEventObj = null; currentSubMarket = null;
         document.getElementById('screen-terminal').classList.add('hidden');
         document.getElementById('screen-catalog').classList.remove('hidden');
     }
@@ -308,55 +300,56 @@
     function selectStrategy(type, riskPct, btnElement) {
         document.querySelectorAll('.strat-btn').forEach(btn => btn.classList.remove('active'));
         btnElement.classList.add('active');
-        activeRisk = riskPct;
-        activeStrat = type;
+        activeRisk = riskPct; activeStrat = type;
         document.getElementById('calculator').classList.remove('hidden');
         recalculate();
     }
 
-    // 🎯 ОБНОВЛЕННЫЙ КАЛЬКУЛЯТОР (Считает для выбранной команды)
     function recalculate() {
         const p = activeTeam === 1 ? priceOut1 : priceOut2;
         const submitBtn = document.getElementById('btn-submit-order');
-        
         if (p <= 0 || p >= 100) {
             document.getElementById('calc-size').innerText = "-";
             document.getElementById('calc-shares').innerText = "-";
             document.getElementById('calc-tp').innerText = "-";
             document.getElementById('calc-sl').innerText = "-";
-            submitBtn.disabled = true;
-            submitBtn.innerText = "РЫНОК НЕДОСТУПЕН";
-            return;
+            submitBtn.disabled = true; submitBtn.innerText = "РЫНОК НЕДОСТУПЕН"; return;
         }
-
         submitBtn.disabled = false;
         submitBtn.innerText = `КУПИТЬ АКЦИИ ЗА ${p}¢`;
-
         const bankroll = parseInt(document.getElementById('bankroll-slider').value);
         const size = (bankroll * activeRisk).toFixed(2);
         const shares = Math.floor((size / (p / 100)));
-        
         document.getElementById('calc-size').innerText = size + " USDC";
         document.getElementById('calc-shares').innerText = shares + " акций";
-
-        let tp = "Ручной выход";
-        let sl = "Ручной выход";
-
-        if (activeStrat === 'draft') {
-            tp = Math.min(99, p + 8) + "¢";
-            sl = Math.max(1, p - 8) + "¢";
-        } else if (activeStrat === 'roshan') {
-            tp = Math.min(99, p + 6) + "¢";
-            sl = Math.max(1, p - 6) + "¢";
-        }
-
+        let tp = activeStrat === 'draft' ? Math.min(99, p + 8) + "¢" : (activeStrat === 'roshan' ? Math.min(99, p + 6) + "¢" : "Ручной выход");
+        let sl = activeStrat === 'draft' ? Math.max(1, p - 8) + "¢" : (activeStrat === 'roshan' ? Math.max(1, p - 6) + "¢" : "Ручной выход");
         document.getElementById('calc-tp').innerText = tp;
         document.getElementById('calc-sl').innerText = sl;
     }
 
-    function confirmOrder() { alert("Ордер отправлен в ядро Полимаркета!"); }
+    async function confirmOrder() {
+        if (!currentSubMarket) return;
+        const submitBtn = document.getElementById('btn-submit-order');
+        const price = activeTeam === 1 ? priceOut1 : priceOut2;
+        const sizeStr = document.getElementById('calc-shares').innerText;
+        const shares = parseInt(sizeStr.replace(" акций", ""));
+        const targetToken = activeTeam === 1 ? currentSubMarket.token_id_yes : currentSubMarket.token_id_no;
+        if (!targetToken) { alert("Ошибка: У исхода нет токена."); return; }
+        submitBtn.innerText = "ОТПРАВКА..."; submitBtn.disabled = true;
+        try {
+            const res = await fetch('/api/trade', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ token_id: targetToken, price: price / 100, size: shares, side: "BUY" })
+            });
+            const data = await res.json();
+            if(data.success) alert(`✅ ОРДЕР ИСПОЛНЕН!\nID: ${data.order_id}`);
+            else alert(`❌ Ошибка ордера:\n${data.error}`);
+        } catch (e) { alert("❌ Ошибка соединения."); }
+        submitBtn.innerText = `КУПИТЬ АКЦИИ ЗА ${price}¢`; submitBtn.disabled = false;
+    }
 
-    // --- ЛОГИКА СПИСКА И СОРТИРОВКИ ---
     async function loadMarkets(gameFilter = 'Dota 2') {
         const listDiv = document.getElementById('matches-list');
         const pagControls = document.getElementById('pagination-controls');
@@ -367,20 +360,45 @@
             const data = await response.json();
             if (data.matches && data.matches.length > 0) {
                 allMatches = data.matches;
-                currentPage = 1; 
-                sortAndRender(); 
+                changeSort(currentSort, true); 
             } else {
                 listDiv.innerHTML = `<div style="color: #f85149;">Матчей по категории "${gameFilter}" сейчас нет.</div>`;
             }
-        } catch (error) {
-            listDiv.innerHTML = `<div style="color: #f85149;">Ошибка соединения с сервером.</div>`;
-        }
+        } catch (error) { listDiv.innerHTML = `<div style="color: #f85149;">Ошибка соединения с сервером.</div>`; }
     }
 
-    function changeSort(val) {
+    function changeSort(val, isInitialLoad = false) {
         currentSort = val;
-        currentPage = 1; // Сбрасываем на первую страницу при смене сортировки
+        if (!isInitialLoad) currentPage = 1; 
         sortAndRender();
+    }
+
+    // 🎯 ИДЕАЛЬНАЯ СОРТИРОВКА (Хронология работает сверху вниз)
+    function sortAndRender() {
+        const now = new Date();
+        
+        if (currentSort === 'volume') {
+            allMatches.sort((a, b) => {
+                const isLiveA = new Date(a.start_date) <= now;
+                const isLiveB = new Date(b.start_date) <= now;
+                // Идущие матчи всегда закреплены наверху
+                if (isLiveA && !isLiveB) return -1;
+                if (!isLiveA && isLiveB) return 1;
+                return b.total_volume - a.total_volume;
+            });
+        } else if (currentSort === 'date') {
+            allMatches.sort((a, b) => {
+                const isLiveA = new Date(a.start_date) <= now;
+                const isLiveB = new Date(b.start_date) <= now;
+                if (isLiveA && !isLiveB) return -1;
+                if (!isLiveA && isLiveB) return 1;
+                
+                const dateA = new Date(a.start_date || '2099').getTime();
+                const dateB = new Date(b.start_date || '2099').getTime();
+                return dateA - dateB; // Ближайшие по времени будут сверху
+            });
+        }
+        renderMatches(allMatches);
     }
 
     function changePage(direction) {
@@ -391,36 +409,11 @@
         renderMatches(allMatches);
     }
 
-    // 🎯 ЛОГИКА СОРТИРОВКИ (По пулу или По времени)
-    function sortAndRender() {
-        if (currentSort === 'liquidity') {
-            allMatches.sort((a, b) => {
-                const sVal = s => s === 'LIVE' ? 0 : s === 'UPCOMING' ? 1 : s === 'FINISHED' ? 2 : 3;
-                if (sVal(a.status) !== sVal(b.status)) return sVal(a.status) - sVal(b.status);
-                return b.total_liquidity - a.total_liquidity;
-            });
-        } else if (currentSort === 'date') {
-            allMatches.sort((a, b) => {
-                const sVal = s => s === 'LIVE' ? 0 : s === 'UPCOMING' ? 1 : s === 'FINISHED' ? 2 : 3;
-                if (sVal(a.status) !== sVal(b.status)) return sVal(a.status) - sVal(b.status);
-                
-                const dateA = new Date(a.start_date || '2099').getTime();
-                const dateB = new Date(b.start_date || '2099').getTime();
-                return dateA - dateB;
-            });
-        }
-        renderMatches(allMatches);
-    }
-
     function renderMatches(matchesArray) {
         const listDiv = document.getElementById('matches-list');
         const pagControls = document.getElementById('pagination-controls');
         listDiv.innerHTML = '';
-
-        if (matchesArray.length === 0) {
-            pagControls.classList.add('hidden');
-            return;
-        }
+        if (matchesArray.length === 0) { pagControls.classList.add('hidden'); return; }
 
         const totalPages = Math.ceil(matchesArray.length / itemsPerPage);
         const startIndex = (currentPage - 1) * itemsPerPage;
@@ -429,48 +422,34 @@
 
         currentSlice.forEach(eventItem => {
             let statusHtml = '';
-            let cardOpacity = '1';
-            let btnHtml = `<button class="btn-trade" onclick="openEventTerminal('${eventItem.event_id}')">Открыть рынки</button>`;
             
-            // 🎯 УМНЫЙ ВЫВОД ВРЕМЕНИ
-            const timeFormatted = formatEventTime(eventItem.start_date);
-
-            if (eventItem.status === 'LIVE' || timeFormatted === 'LIVE') {
+            // 🎯 СВЕРКА ВРЕМЕНИ ДЛЯ ПЛАШКИ
+            const timeStr = formatEventTime(eventItem.start_date);
+            if (timeStr === 'LIVE') {
                 statusHtml = '<span class="live-badge">LIVE</span>';
-            } else if (eventItem.status === 'FINISHED') {
-                statusHtml = '<span style="background-color: #30363d; color: #8b949e; padding: 3px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; margin-right: 10px;">ЗАВЕРШЕН</span>';
-                cardOpacity = '0.5';
-                btnHtml = `<button class="btn-trade" style="background-color: #21262d; color: #8b949e; cursor: pointer;" onclick="openEventTerminal('${eventItem.event_id}')">Смотреть</button>`;
-            } else if (eventItem.status === 'EMPTY') {
-                statusHtml = '<span style="background-color: #30363d; color: #8b949e; padding: 3px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; margin-right: 10px;">ПУСТОЙ</span>';
-                cardOpacity = '0.5';
             } else {
-                // Если матч UPCOMING, выводим красивую дату
-                statusHtml = timeFormatted 
-                    ? `<span class="time-badge">${timeFormatted}</span>` 
-                    : '<span style="color: #8b949e; font-size: 12px; font-weight: bold; margin-right: 10px;">ОЖИДАЕТСЯ</span>';
+                statusHtml = `<span class="time-badge">${timeStr}</span>`;
             }
 
-            const totalLiqFormatted = eventItem.total_liquidity ? '$' + Math.round(eventItem.total_liquidity).toLocaleString('en-US') : '$0';
+            const totalVolFormatted = formatVolume(eventItem.total_volume);
             const marketsCount = eventItem.sub_markets.length;
 
-            const cardHtml = `
-                <div class="card" style="opacity: ${cardOpacity};">
+            listDiv.innerHTML += `
+                <div class="card">
                     <div>
-                        <div style="margin-bottom: 12px;">
+                        <div style="margin-bottom: 12px; display: flex; align-items: center;">
                             <span class="game-badge">${eventItem.game}</span> ${statusHtml}
                         </div>
                         <span style="font-weight: bold; font-size: 20px; color: #c9d1d9;">${eventItem.title}</span>
                         <div style="color: #8b949e; font-size: 14px; margin-top: 8px;">
-                            Пул ликвидности: <span style="color: #58a6ff; font-weight:bold;">${totalLiqFormatted}</span> &nbsp;|&nbsp; Открыто рынков: <span style="color: #c9d1d9;">${marketsCount}</span>
+                            Объем торгов: <span style="color: #58a6ff; font-weight:bold;">${totalVolFormatted}</span> &nbsp;|&nbsp; Доступно линий: <span style="color: #c9d1d9;">${marketsCount}</span>
                         </div>
                     </div>
                     <div>
-                        ${btnHtml}
+                        <button class="btn-trade" onclick="openEventTerminal('${eventItem.event_id}')">Открыть рынки</button>
                     </div>
                 </div>
             `;
-            listDiv.innerHTML += cardHtml;
         });
 
         if (totalPages > 1) {
@@ -478,9 +457,7 @@
             document.getElementById('page-info').innerText = `Страница ${currentPage} из ${totalPages}`;
             document.getElementById('btn-prev').disabled = currentPage === 1;
             document.getElementById('btn-next').disabled = currentPage === totalPages;
-        } else {
-            pagControls.classList.add('hidden');
-        }
+        } else { pagControls.classList.add('hidden'); }
     }
 
     document.querySelectorAll('.filter-btn').forEach(btn => {

@@ -12,21 +12,12 @@ async def get_markets(game: str = Query("Dota 2")):
     try:
         url = "https://gamma-api.polymarket.com/events"
         
-        if game == "Dota 2":
-            target_tags = ["dota-2"]
-            offsets = [0, 100, 200]
-        elif game == "CS2":
-            target_tags = ["csgo", "counter-strike"]
-            offsets = [0, 100, 200]
-        elif game == "LoL":
-            target_tags = ["league-of-legends"]
-            offsets = [0, 100, 200]
-        else: 
-            target_tags = ["esports", "dota-2", "csgo", "league-of-legends"]
-            offsets = [0, 100] 
+        if game == "Dota 2": target_tags = ["dota-2"]; offsets = [0, 100]
+        elif game == "CS2": target_tags = ["csgo", "counter-strike"]; offsets = [0, 100]
+        elif game == "LoL": target_tags = ["league-of-legends"]; offsets = [0, 100]
+        else: target_tags = ["esports", "dota-2", "csgo", "league-of-legends"]; offsets = [0, 100] 
         
-        print(f"⏳ [РАДАР] Интеллектуальная группировка событий по категории: {game}...")
-        
+        print(f"⏳ [РАДАР] Запрос дисциплины {game}. Фильтрация мусора и завершенных игр...")
         events_dict = {}
         
         async with AsyncSession(impersonate="chrome110") as session:
@@ -41,16 +32,15 @@ async def get_markets(game: str = Query("Dota 2")):
             responses = await asyncio.gather(*tasks, return_exceptions=True)
             
             for resp in responses:
-                if isinstance(resp, Exception) or resp.status_code != 200:
-                    continue
+                if isinstance(resp, Exception) or resp.status_code != 200: continue
                     
                 data = resp.json()
                 for event in data:
                     event_id = event.get("id")
                     title = event.get("title", "")
                     
-                    # 🎯 ВЫТАСКИВАЕМ ВРЕМЯ НАЧАЛА МАТЧА
-                    start_date = event.get("startDate") or event.get("endDate") or ""
+                    # 🎯 ЧЕТКО БЕРЕМ ВРЕМЯ НАЧАЛА СОБЫТИЯ
+                    start_date = event.get("startDate") or ""
                     
                     tags = event.get("tags", [])
                     tag_slugs = [str(t.get("slug", "")).lower() for t in tags]
@@ -69,22 +59,40 @@ async def get_markets(game: str = Query("Dota 2")):
                         
                     if event_id not in events_dict:
                         events_dict[event_id] = {
-                            "event_id": event_id,
-                            "title": title,
-                            "game": game_category,
-                            "start_date": start_date, # Передаем дату на фронт
-                            "status": "EMPTY", 
-                            "total_liquidity": 0.0,
-                            "sub_markets": []
+                            "event_id": event_id, "title": title, "game": game_category,
+                            "start_date": start_date, "status": "UPCOMING", "total_volume": 0.0, "sub_markets": []
                         }
                     
                     for market in markets:
+                        # 🎯 КРИТ ФИЛЬТР 1: Убираем закрытые или рассчитанные рынки
+                        if market.get("resolved") is True or market.get("closed") is True:
+                            continue
+                            
                         market_id = market.get("id")
-                        
                         if any(m["market_id"] == market_id for m in events_dict[event_id]["sub_markets"]): continue
                             
                         market_question = market.get("question", title)
+                        q_low = market_question.lower()
                         
+                        # 🎯 КРИТ ФИЛЬТР 2: Отсекаем киллы, фёрст блады и прочую неликвидную хрень
+                        is_moneyline = any(k in q_low for k in ["winner of the match", "match winner", "who will win the match", "who will win?"]) or q_low == title.lower().strip()
+                        is_map = "map" in q_low and "winner" in q_low
+                        is_junk = any(k in q_low for k in ["kill", "first blood", "handicap", "pistol", "score", "total", "duration", "knife", "overtime", "round", "quadro", "ace", "map count", "correct score"])
+                        
+                        if not (is_moneyline or is_map) or is_junk:
+                            continue # Полностью игнорируем этот подрынок
+                        
+                        outcome_prices = market.get("outcomePrices", [])
+                        if isinstance(outcome_prices, str):
+                            try: outcome_prices = json.loads(outcome_prices)
+                            except: outcome_prices = []
+                            
+                        current_price = float(outcome_prices[0]) if outcome_prices and len(outcome_prices) > 0 else 0.5
+                        
+                        # Если цена улетела в край, значит матч по факту завершен
+                        if current_price >= 0.99 or current_price <= 0.01:
+                            continue
+
                         raw_outcomes = market.get("outcomes", ["YES", "NO"])
                         if isinstance(raw_outcomes, str):
                             try: outcomes = json.loads(raw_outcomes)
@@ -102,51 +110,26 @@ async def get_markets(game: str = Query("Dota 2")):
                             
                         if not clob_token_ids or len(clob_token_ids) == 0: continue
                             
-                        target_token = clob_token_ids[0]
+                        token_yes = clob_token_ids[0]
+                        token_no = clob_token_ids[1] if len(clob_token_ids) > 1 else ""
+                        
                         liquidity = float(market.get("liquidity", 0))
                         volume = float(market.get("volume", 0))
                         
-                        outcome_prices = market.get("outcomePrices", [])
-                        if isinstance(outcome_prices, str):
-                            try: outcome_prices = json.loads(outcome_prices)
-                            except: outcome_prices = []
-                            
-                        current_price = float(outcome_prices[0]) if outcome_prices and len(outcome_prices) > 0 else 0.5
+                        events_dict[event_id]["total_volume"] += volume
                         
-                        if event.get("active") and market.get("active"):
-                            if current_price >= 0.95 or current_price <= 0.05: m_status = "FINISHED" 
-                            elif liquidity > 0 or volume > 0: m_status = "LIVE"
-                            else: m_status = "EMPTY"
-                        else:
-                            m_status = "UPCOMING"
-                        
-                        events_dict[event_id]["total_liquidity"] += liquidity
-                        
-                        current_ev_status = events_dict[event_id]["status"]
-                        if m_status == "LIVE" or current_ev_status == "EMPTY": events_dict[event_id]["status"] = m_status
-                        elif m_status == "UPCOMING" and current_ev_status == "FINISHED": events_dict[event_id]["status"] = m_status
-
                         events_dict[event_id]["sub_markets"].append({
-                            "market_id": market_id,
-                            "condition_id": target_token,
-                            "question": market_question,
-                            "status": m_status,
-                            "liquidity": liquidity,
-                            "price": current_price,
-                            "out1": out1,
-                            "out2": out2
+                            "market_id": market_id, "condition_id": token_yes, 
+                            "token_id_yes": token_yes, "token_id_no": token_no,
+                            "question": market_question, "status": "LIVE" if (liquidity > 0 or volume > 0) else "UPCOMING",
+                            "volume": volume, "price": current_price,
+                            "out1": out1, "out2": out2
                         })
 
-        final_events = [e for e in events_dict.values() if e["sub_markets"]]
-        
-        # Базовая сортировка (фронтенд будет её переопределять)
-        final_events.sort(key=lambda x: (
-            0 if x["status"] == "LIVE" else (1 if x["status"] == "UPCOMING" else (2 if x["status"] == "FINISHED" else 3)),
-            -x["total_liquidity"]
-        ))
+        # 🎯 КРИТ ФИЛЬТР 3: Оставляем только те матчи, у которых есть актуальные чистые подрынки
+        final_events = [e for e in events_dict.values() if len(e["sub_markets"]) > 0]
         
         return {"matches": final_events}
-        
     except Exception as e:
         print(f"❌ Критическая ошибка: {e}")
         return {"error": str(e)}
