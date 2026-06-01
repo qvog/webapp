@@ -12,12 +12,13 @@ async def get_markets(game: str = Query("Dota 2")):
     try:
         url = "https://gamma-api.polymarket.com/events"
         
-        if game == "Dota 2": target_tags = ["dota-2"]; offsets = [0, 100]
-        elif game == "CS2": target_tags = ["csgo", "counter-strike"]; offsets = [0, 100]
-        elif game == "LoL": target_tags = ["league-of-legends"]; offsets = [0, 100]
+        # Берем более широкие теги на случай, если Полимаркет изменил структуру
+        if game == "Dota 2": target_tags = ["dota-2", "esports"]; offsets = [0, 100]
+        elif game == "CS2": target_tags = ["csgo", "counter-strike", "esports"]; offsets = [0, 100]
+        elif game == "LoL": target_tags = ["league-of-legends", "esports"]; offsets = [0, 100]
         else: target_tags = ["esports", "dota-2", "csgo", "league-of-legends"]; offsets = [0, 100] 
         
-        print(f"⏳ [РАДАР] Запрос дисциплины {game}. Фильтрация мусора и завершенных игр...")
+        print(f"\n⏳ [РАДАР] Запрос дисциплины: {game}. Начинаем сканирование...")
         events_dict = {}
         
         async with AsyncSession(impersonate="chrome110") as session:
@@ -31,15 +32,25 @@ async def get_markets(game: str = Query("Dota 2")):
                     
             responses = await asyncio.gather(*tasks, return_exceptions=True)
             
-            for resp in responses:
-                if isinstance(resp, Exception) or resp.status_code != 200: continue
+            for i, resp in enumerate(responses):
+                # 1. Проверяем, не отвалился ли интернет/прокси
+                if isinstance(resp, Exception):
+                    print(f"❌ [СЕТЬ] Ошибка запроса {i}: {resp}")
+                    continue
+                
+                # 2. Печатаем ответ сервера
+                print(f"📡 [СЕРВЕР] Тег запроса {i} | Статус: {resp.status_code} | Длина ответа: {len(resp.content)} байт")
+                
+                if resp.status_code != 200:
+                    print(f"⚠️ [БЛОКИРОВКА] Сервер не пустил! Ответ: {resp.text[:150]}")
+                    continue
                     
                 data = resp.json()
+                print(f"📦 [СЫРЫЕ ДАННЫЕ] Получено событий до фильтрации: {len(data)}")
+                
                 for event in data:
                     event_id = event.get("id")
                     title = event.get("title", "")
-                    
-                    # 🎯 ЧЕТКО БЕРЕМ ВРЕМЯ НАЧАЛА СОБЫТИЯ
                     start_date = event.get("startDate") or ""
                     
                     tags = event.get("tags", [])
@@ -63,10 +74,10 @@ async def get_markets(game: str = Query("Dota 2")):
                             "start_date": start_date, "status": "UPCOMING", "total_volume": 0.0, "sub_markets": []
                         }
                     
+                    valid_markets_count = 0
+                    
                     for market in markets:
-                        # 🎯 КРИТ ФИЛЬТР 1: Убираем закрытые или рассчитанные рынки
-                        if market.get("resolved") is True or market.get("closed") is True:
-                            continue
+                        if market.get("resolved") is True or market.get("closed") is True: continue
                             
                         market_id = market.get("id")
                         if any(m["market_id"] == market_id for m in events_dict[event_id]["sub_markets"]): continue
@@ -74,13 +85,13 @@ async def get_markets(game: str = Query("Dota 2")):
                         market_question = market.get("question", title)
                         q_low = market_question.lower()
                         
-                        # 🎯 КРИТ ФИЛЬТР 2: Отсекаем киллы, фёрст блады и прочую неликвидную хрень
-                        is_moneyline = any(k in q_low for k in ["winner of the match", "match winner", "who will win the match", "who will win?"]) or q_low == title.lower().strip()
-                        is_map = "map" in q_low and "winner" in q_low
-                        is_junk = any(k in q_low for k in ["kill", "first blood", "handicap", "pistol", "score", "total", "duration", "knife", "overtime", "round", "quadro", "ace", "map count", "correct score"])
+                        is_junk = any(k in q_low for k in [
+                            "kill", "first blood", "handicap", "pistol", "score", 
+                            "total", "duration", "knife", "overtime", "round", 
+                            "quadro", "ace", "map count", "correct score"
+                        ])
                         
-                        if not (is_moneyline or is_map) or is_junk:
-                            continue # Полностью игнорируем этот подрынок
+                        if is_junk: continue 
                         
                         outcome_prices = market.get("outcomePrices", [])
                         if isinstance(outcome_prices, str):
@@ -88,10 +99,7 @@ async def get_markets(game: str = Query("Dota 2")):
                             except: outcome_prices = []
                             
                         current_price = float(outcome_prices[0]) if outcome_prices and len(outcome_prices) > 0 else 0.5
-                        
-                        # Если цена улетела в край, значит матч по факту завершен
-                        if current_price >= 0.99 or current_price <= 0.01:
-                            continue
+                        if current_price >= 0.99 or current_price <= 0.01: continue
 
                         raw_outcomes = market.get("outcomes", ["YES", "NO"])
                         if isinstance(raw_outcomes, str):
@@ -117,6 +125,7 @@ async def get_markets(game: str = Query("Dota 2")):
                         volume = float(market.get("volume", 0))
                         
                         events_dict[event_id]["total_volume"] += volume
+                        valid_markets_count += 1
                         
                         events_dict[event_id]["sub_markets"].append({
                             "market_id": market_id, "condition_id": token_yes, 
@@ -125,11 +134,16 @@ async def get_markets(game: str = Query("Dota 2")):
                             "volume": volume, "price": current_price,
                             "out1": out1, "out2": out2
                         })
+                    
+                    if valid_markets_count == 0:
+                        print(f"⚠️ [СКИП] {title[:40]}... -> Нет валидных рынков")
+                    else:
+                        print(f"✅ [ДОБАВЛЕН] {title[:40]}... -> Открыто рынков: {valid_markets_count}")
 
-        # 🎯 КРИТ ФИЛЬТР 3: Оставляем только те матчи, у которых есть актуальные чистые подрынки
         final_events = [e for e in events_dict.values() if len(e["sub_markets"]) > 0]
+        print(f"📊 Итог сканирования: Найдено {len(final_events)} активных матчей для {game}.\n")
         
         return {"matches": final_events}
     except Exception as e:
-        print(f"❌ Критическая ошибка: {e}")
+        print(f"❌ Критическая ошибка парсинга: {e}")
         return {"error": str(e)}
