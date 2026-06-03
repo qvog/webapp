@@ -126,10 +126,10 @@
                 </div>
 
                 <div class="strategies">
-                    <button class="strat-btn" onclick="selectStrategy('draft', 0.025, this)">ДРАФТ [2.5%]</button>
-                    <button class="strat-btn" onclick="selectStrategy('match', 0.05, this)">ИСХОД [5%]</button>
-                    <button class="strat-btn" onclick="selectStrategy('roshan', 0.015, this)">РОШАН [1.5%]</button>
-                    <button class="strat-btn" onclick="selectStrategy('sure', 0.20, this)">ВЕРНЯК [20%]</button>
+                    <button class="strat-btn" onclick="selectStrategy('draft', 2.5, this)">ДРАФТ [2.5%]</button>
+                    <button class="strat-btn" onclick="selectStrategy('match', 5.0, this)">ИСХОД [5%]</button>
+                    <button class="strat-btn" onclick="selectStrategy('roshan', 1.5, this)">РОШАН [1.5%]</button>
+                    <button class="strat-btn" onclick="selectStrategy('sure', 20.0, this)">ВЕРНЯК [20%]</button>
                 </div>
 
                 <div id="calculator" class="calc-box hidden">
@@ -167,14 +167,12 @@
         return '$' + Math.round(val);
     }
 
-    // 🎯 ИСПРАВЛЕННЫЙ ПАРСЕР ВРЕМЕНИ ДЛЯ СТАТУСОВ
     function formatEventTime(dateStr) {
         if (!dateStr) return 'ОЖИДАЕТСЯ';
         const d = new Date(dateStr);
         if (isNaN(d.getTime())) return 'ОЖИДАЕТСЯ';
 
         const now = new Date();
-        // Если системное время ПК больше времени начала - матч 100% идет в LIVE
         if (d <= now) return 'LIVE'; 
         
         const timeStr = d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
@@ -316,12 +314,16 @@
             submitBtn.disabled = true; submitBtn.innerText = "РЫНОК НЕДОСТУПЕН"; return;
         }
         submitBtn.disabled = false;
-        submitBtn.innerText = `КУПИТЬ АКЦИИ ЗА ${p}¢`;
+        submitBtn.innerText = `КУПИТЬ ЗА ${p}¢`;
+        
+        // 🎯 Считаем риск и подгоняем под лимиты
         const bankroll = parseInt(document.getElementById('bankroll-slider').value);
-        const size = (bankroll * activeRisk).toFixed(2);
-        const shares = Math.floor((size / (p / 100)));
-        document.getElementById('calc-size').innerText = size + " USDC";
-        document.getElementById('calc-shares').innerText = shares + " акций";
+        let target_usd = bankroll * (activeRisk / 100);
+        let display_amount = Math.min(bankroll, Math.max(5.00, target_usd));
+        
+        document.getElementById('calc-size').innerText = "~" + display_amount.toFixed(2) + " USDC";
+        document.getElementById('calc-shares').innerText = "Сервер рассчитает (Мин. $5)";
+        
         let tp = activeStrat === 'draft' ? Math.min(99, p + 8) + "¢" : (activeStrat === 'roshan' ? Math.min(99, p + 6) + "¢" : "Ручной выход");
         let sl = activeStrat === 'draft' ? Math.max(1, p - 8) + "¢" : (activeStrat === 'roshan' ? Math.max(1, p - 6) + "¢" : "Ручной выход");
         document.getElementById('calc-tp').innerText = tp;
@@ -332,22 +334,31 @@
         if (!currentSubMarket) return;
         const submitBtn = document.getElementById('btn-submit-order');
         const price = activeTeam === 1 ? priceOut1 : priceOut2;
-        const sizeStr = document.getElementById('calc-shares').innerText;
-        const shares = parseInt(sizeStr.replace(" акций", ""));
+        
+        const bankroll = parseFloat(document.getElementById('bankroll-slider').value);
+        
         const targetToken = activeTeam === 1 ? currentSubMarket.token_id_yes : currentSubMarket.token_id_no;
         if (!targetToken) { alert("Ошибка: У исхода нет токена."); return; }
+        
         submitBtn.innerText = "ОТПРАВКА..."; submitBtn.disabled = true;
         try {
+            // 🎯 Отправляем на бэкенд bankroll и risk_percent
             const res = await fetch('/api/trade', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ token_id: targetToken, price: price / 100, size: shares, side: "BUY" })
+                body: JSON.stringify({ 
+                    token_id: targetToken, 
+                    price: price / 100, 
+                    side: "BUY",
+                    bankroll: bankroll,
+                    risk_percent: activeRisk
+                })
             });
             const data = await res.json();
             if(data.success) alert(`✅ ОРДЕР ИСПОЛНЕН!\nID: ${data.order_id}`);
             else alert(`❌ Ошибка ордера:\n${data.error}`);
         } catch (e) { alert("❌ Ошибка соединения."); }
-        submitBtn.innerText = `КУПИТЬ АКЦИИ ЗА ${price}¢`; submitBtn.disabled = false;
+        submitBtn.innerText = `КУПИТЬ ЗА ${price}¢`; submitBtn.disabled = false;
     }
 
     async function loadMarkets(gameFilter = 'Dota 2') {
@@ -373,7 +384,6 @@
         sortAndRender();
     }
 
-    // 🎯 ИДЕАЛЬНАЯ СОРТИРОВКА (Хронология работает сверху вниз)
     function sortAndRender() {
         const now = new Date();
         
@@ -381,7 +391,6 @@
             allMatches.sort((a, b) => {
                 const isLiveA = new Date(a.start_date) <= now;
                 const isLiveB = new Date(b.start_date) <= now;
-                // Идущие матчи всегда закреплены наверху
                 if (isLiveA && !isLiveB) return -1;
                 if (!isLiveA && isLiveB) return 1;
                 return b.total_volume - a.total_volume;
@@ -395,7 +404,7 @@
                 
                 const dateA = new Date(a.start_date || '2099').getTime();
                 const dateB = new Date(b.start_date || '2099').getTime();
-                return dateA - dateB; // Ближайшие по времени будут сверху
+                return dateA - dateB; 
             });
         }
         renderMatches(allMatches);
@@ -423,7 +432,6 @@
         currentSlice.forEach(eventItem => {
             let statusHtml = '';
             
-            // 🎯 СВЕРКА ВРЕМЕНИ ДЛЯ ПЛАШКИ
             const timeStr = formatEventTime(eventItem.start_date);
             if (timeStr === 'LIVE') {
                 statusHtml = '<span class="live-badge">LIVE</span>';

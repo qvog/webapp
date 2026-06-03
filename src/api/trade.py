@@ -31,19 +31,36 @@ print("=======================================")
 class TradeRequest(BaseModel):
     token_id: str
     price: float
-    size: float
     side: str
+    bankroll: float      # Твой текущий депозит (например, 100.0)
+    risk_percent: float  # Процент от банка (например, 2.0 или 5.0)
 
 @router.post("/api/trade")
 def place_order(req: TradeRequest):
     safe_price = round(float(req.price), 2)
-    safe_size = round(float(req.size), 2)
     side_const = BUY if req.side.upper() == "BUY" else SELL
     
-    print(f"\n🚀 Поступил ордер V2: {req.side} {safe_size} акций. Цена: {safe_price}$")
+    print(f"\n🚀 Поступил запрос на ордер: {req.side} по цене {safe_price}$")
     
-    if (safe_price * safe_size) < 5.0:
-        return {"success": False, "error": "Ордер слишком мал."}
+    # 🎯 1. Базовая защита
+    if req.bankroll < 5.00:
+        error_msg = f"Банкролл ({req.bankroll}$) меньше минимального порога биржи ($5)."
+        print(f"❌ {error_msg}")
+        return {"success": False, "error": error_msg}
+        
+    # 🎯 2. Идеальная формула сайзинга
+    target_invest = req.bankroll * (req.risk_percent / 100)
+    
+    # Берем максимум между 5$ и расчетным таргетом, 
+    # но ограничиваем сверху общим размером банкролла
+    actual_invest = min(req.bankroll, max(5.00, target_invest))
+    
+    # 🎯 3. Переводим инвестицию в количество акций
+    safe_size = round(actual_invest / safe_price, 2)
+    effective_risk = round((actual_invest / req.bankroll) * 100, 2)
+    
+    print(f"🧮 Идеальный риск: {req.risk_percent}%. Фактический риск: {effective_risk}%")
+    print(f"💰 Сумма в сделку: {actual_invest:.2f}$. Акций (Size): {safe_size}")
     
     try:
         print("⚙️ Инициализация клиента: Deposit Wallet Flow (POLY_1271)...")
