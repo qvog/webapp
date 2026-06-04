@@ -47,6 +47,12 @@
         .price-green { color: #3fb950; font-size: 28px; font-weight: bold; }
         .price-red { color: #f85149; font-size: 28px; font-weight: bold; }
         
+        /* Стили для кастомной лимитки (Аккуратно вписаны в твой дизайн) */
+        .custom-limit-box { background-color: #0d1117; border: 1px solid #30363d; padding: 15px; border-radius: 8px; display: flex; gap: 15px; align-items: center; margin-bottom: 20px; }
+        .custom-limit-input { background-color: #161b22; color: #c9d1d9; border: 1px solid #58a6ff; padding: 10px; border-radius: 6px; width: 80px; font-size: 16px; font-weight: bold; text-align: center; outline: none; }
+        .btn-custom { background-color: #1f2e4d; color: #58a6ff; border: 1px solid #58a6ff; padding: 10px; border-radius: 6px; cursor: pointer; font-weight: bold; flex: 1; transition: 0.2s; }
+        .btn-custom:hover:not(:disabled) { background-color: #2f4473; color: white; }
+        
         .slider-container { margin-top: 20px; background-color: #0d1117; padding: 15px; border-radius: 8px; border: 1px solid #30363d;}
         .strategies { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 20px; }
         .strat-btn { background-color: #21262d; border: 1px solid #30363d; color: #c9d1d9; padding: 12px; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: bold; transition: 0.2s; }
@@ -120,6 +126,14 @@
                     </div>
                 </div>
 
+                <!-- БЛОК ЛИМИТНОГО ОРДЕРА -->
+                <div class="custom-limit-box">
+                    <div style="font-size: 13px; color: #8b949e;">ЛИМИТНЫЙ<br>ОРДЕР</div>
+                    <input type="number" id="custom-price-in" class="custom-limit-input" placeholder="Вход ¢" min="1" max="99">
+                    <input type="number" id="custom-price-out" class="custom-limit-input" placeholder="Тейк ¢" min="1" max="99">
+                    <button id="btn-custom-order" class="btn-custom" onclick="confirmCustomOrder()">ПОСТАВИТЬ ЛИМИТКУ</button>
+                </div>
+
                 <div class="slider-container">
                     <label>Размер позиции: <strong id="bankroll-val">100</strong> USDC</label>
                     <input type="range" id="bankroll-slider" min="10" max="1000" step="10" value="100" style="width: 100%; margin-top: 15px;" oninput="updateBankroll()">
@@ -137,7 +151,7 @@
                     <div class="calc-row"><span>Кол-во акций:</span> <strong id="calc-shares">-</strong></div>
                     <div class="calc-row" style="color: #58a6ff; margin-top: 10px;"><span>Тейк-профит (Выход):</span> <strong id="calc-tp">-</strong></div>
                     <div class="calc-row" style="color: #f85149;"><span>Стоп-лосс (Сброс):</span> <strong id="calc-sl">-</strong></div>
-                    <button id="btn-submit-order" class="btn-confirm" onclick="confirmOrder()">ОТПРАВИТЬ ОРДЕР</button>
+                    <button id="btn-submit-order" class="btn-confirm" onclick="confirmOrder()">КУПИТЬ ПО РЫНКУ</button>
                 </div>
             </div>
         </div>
@@ -281,6 +295,8 @@
         document.querySelectorAll('.strat-btn').forEach(btn => btn.classList.remove('active'));
         selectTeam(1);
         priceOut1 = 0; priceOut2 = 0; activeRisk = 0;
+        document.getElementById('custom-price-in').value = '';
+        document.getElementById('custom-price-out').value = '';
     }
 
     function closeTerminal() {
@@ -316,7 +332,6 @@
         submitBtn.disabled = false;
         submitBtn.innerText = `КУПИТЬ ЗА ${p}¢`;
         
-        // 🎯 Считаем риск и подгоняем под лимиты
         const bankroll = parseInt(document.getElementById('bankroll-slider').value);
         let target_usd = bankroll * (activeRisk / 100);
         let display_amount = Math.min(bankroll, Math.max(5.00, target_usd));
@@ -324,41 +339,132 @@
         document.getElementById('calc-size').innerText = "~" + display_amount.toFixed(2) + " USDC";
         document.getElementById('calc-shares').innerText = "Сервер рассчитает (Мин. $5)";
         
-        let tp = activeStrat === 'draft' ? Math.min(99, p + 8) + "¢" : (activeStrat === 'roshan' ? Math.min(99, p + 6) + "¢" : "Ручной выход");
-        let sl = activeStrat === 'draft' ? Math.max(1, p - 8) + "¢" : (activeStrat === 'roshan' ? Math.max(1, p - 6) + "¢" : "Ручной выход");
-        document.getElementById('calc-tp').innerText = tp;
-        document.getElementById('calc-sl').innerText = sl;
+        let tpStr = "Только ручной выход";
+        let p_dec = p / 100;
+        
+        if (activeStrat === 'draft' || activeStrat === 'roshan') {
+            let delta_tp = activeStrat === 'roshan' ? 0.5 : 0.3;
+            let calc_tp_dec = p_dec + (delta_tp * (1 - p_dec));
+            tpStr = Math.round(Math.min(0.99, calc_tp_dec) * 100) + "¢";
+        }
+        
+        let delta_sl = 0.4;
+        if (activeStrat === 'sure') delta_sl = 0.5;
+        if (activeStrat === 'roshan') delta_sl = 0.2;
+        let slStr = Math.max(1, Math.round((p_dec - (delta_sl * p_dec)) * 100)) + "¢";
+
+        document.getElementById('calc-tp').innerText = tpStr;
+        document.getElementById('calc-sl').innerText = slStr;
     }
 
     async function confirmOrder() {
         if (!currentSubMarket) return;
         const submitBtn = document.getElementById('btn-submit-order');
         const price = activeTeam === 1 ? priceOut1 : priceOut2;
-        
         const bankroll = parseFloat(document.getElementById('bankroll-slider').value);
         
         const targetToken = activeTeam === 1 ? currentSubMarket.token_id_yes : currentSubMarket.token_id_no;
         if (!targetToken) { alert("Ошибка: У исхода нет токена."); return; }
         
+        let tp_payload = null;
+        if (activeStrat === 'draft' || activeStrat === 'roshan') {
+            let p_dec = price / 100;
+            let delta_tp = activeStrat === 'roshan' ? 0.5 : 0.3;
+            let calc_tp_dec = p_dec + (delta_tp * (1 - p_dec));
+            tp_payload = parseFloat(Math.min(0.99, calc_tp_dec).toFixed(2));
+        }
+        
         submitBtn.innerText = "ОТПРАВКА..."; submitBtn.disabled = true;
         try {
-            // 🎯 Отправляем на бэкенд bankroll и risk_percent
+            const requestBody = { 
+                token_id: targetToken, 
+                price: price / 100, 
+                side: "BUY",
+                bankroll: bankroll,
+                risk_percent: activeRisk
+            };
+            
+            if (tp_payload !== null) {
+                requestBody.take_profit_price = tp_payload;
+            }
+
             const res = await fetch('/api/trade', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ 
-                    token_id: targetToken, 
-                    price: price / 100, 
-                    side: "BUY",
-                    bankroll: bankroll,
-                    risk_percent: activeRisk
-                })
+                body: JSON.stringify(requestBody)
             });
             const data = await res.json();
-            if(data.success) alert(`✅ ОРДЕР ИСПОЛНЕН!\nID: ${data.order_id}`);
-            else alert(`❌ Ошибка ордера:\n${data.error}`);
+            
+            if(data.success) {
+                if(data.tp_order_id || tp_payload) {
+                    alert(`✅ ОРДЕР КУПЛЕН!\nТейк-профит успешно выставлен (см. логи сервера).\nID: ${data.order_id}`);
+                } else {
+                    alert(`✅ ОРДЕР КУПЛЕН!\nАвтоматический ТП отключен для этой стратегии.\nID: ${data.order_id}`);
+                }
+            } else {
+                alert(`❌ Ошибка ордера:\n${data.error}`);
+            }
         } catch (e) { alert("❌ Ошибка соединения."); }
+        
         submitBtn.innerText = `КУПИТЬ ЗА ${price}¢`; submitBtn.disabled = false;
+    }
+
+    async function confirmCustomOrder() {
+        if (!currentSubMarket) return;
+        
+        const priceInCents = parseInt(document.getElementById('custom-price-in').value);
+        const priceOutCents = parseInt(document.getElementById('custom-price-out').value);
+        
+        if (isNaN(priceInCents) || priceInCents < 1 || priceInCents > 99) {
+            alert("Пожалуйста, введите корректную цену Входа (от 1 до 99).");
+            return;
+        }
+        
+        if (activeRisk === 0) {
+            alert("Сначала выберите стратегию (Драфт, Исход и т.д.), чтобы рассчитать объем.");
+            return;
+        }
+
+        const bankroll = parseFloat(document.getElementById('bankroll-slider').value);
+        const targetToken = activeTeam === 1 ? currentSubMarket.token_id_yes : currentSubMarket.token_id_no;
+        const btn = document.getElementById('btn-custom-order');
+        
+        btn.innerText = "ОТПРАВКА..."; btn.disabled = true;
+        
+        try {
+            const requestBody = { 
+                token_id: targetToken, 
+                price: priceInCents / 100,
+                side: "BUY",
+                bankroll: bankroll,
+                risk_percent: activeRisk,
+                is_custom_limit: true 
+            };
+            
+            if (!isNaN(priceOutCents) && priceOutCents > priceInCents && priceOutCents < 100) {
+                requestBody.take_profit_price = priceOutCents / 100;
+            }
+
+            const res = await fetch('/api/trade', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(requestBody)
+            });
+            const data = await res.json();
+            
+            if(data.success) {
+                if(requestBody.take_profit_price) {
+                    alert(`✅ СЕТКА ВЫСТАВЛЕНА!\nВход: ${priceInCents}¢. Сервер ждет исполнения, чтобы кинуть тейк на ${priceOutCents}¢.\nID: ${data.order_id}`);
+                } else {
+                    alert(`✅ ЛИМИТКА ВЫСТАВЛЕНА (БЕЗ ТЕЙКА)!\nВход: ${priceInCents}¢.\nID: ${data.order_id}`);
+                }
+                document.getElementById('custom-price-in').value = '';
+                document.getElementById('custom-price-out').value = '';
+            }
+            else alert(`❌ Ошибка:\n${data.error}`);
+        } catch (e) { alert("❌ Ошибка соединения."); }
+        
+        btn.innerText = "ПОСТАВИТЬ ЛИМИТКУ"; btn.disabled = false;
     }
 
     async function loadMarkets(gameFilter = 'Dota 2') {
