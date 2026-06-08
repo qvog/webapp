@@ -28,13 +28,12 @@ class TradeRequest(BaseModel):
     bankroll: float
     risk_percent: float
     take_profit_price: Optional[float] = None
-    is_custom_limit: bool = False  # Флаг для понимания, что это кастомная лимитка
+    is_custom_limit: bool = False
 
-# 🕵️‍♂️ Универсальный Воркер: ждет зачисления токенов и кидает Тейк-Профит
-def monitor_and_place_tp(client: ClobClient, order_id: str, tp_price: float, size: float, token_id: str, options):
+# 🕵️‍♂️ Умный Воркер (С защитой от проблемы пыли / Dust Issue)
+def monitor_and_place_tp(client: ClobClient, order_id: str, tp_price: float, original_size: float, token_id: str, options):
     print(f"👀 [Воркер] Наблюдаю за ордером {order_id} (Жду исполнения)...")
     
-    # 86400 итераций по 1 секунде = сутки ожидания (хватит и для долгих лимиток)
     for _ in range(86400):
         try:
             order_info = client.get_order(order_id)
@@ -42,19 +41,29 @@ def monitor_and_place_tp(client: ClobClient, order_id: str, tp_price: float, siz
             status = order_data.get('status', '')
             
             if status in ['MATCHED', 'FILLED']:
-                # Ордер исполнен (или токены дошли), пробуем кинуть тейк-профит
-                tp_args = OrderArgs(price=tp_price, size=size, side=SELL, token_id=token_id)
+                # 🎯 ЛЕЧИМ ОШИБКУ БАЛАНСА: Берем реально купленный объем
+                size_matched = order_data.get('size_matched')
+                
+                if size_matched and float(size_matched) > 0:
+                    # Округляем СТРОГО ВНИЗ до 2 знаков (например 9.081554 -> 9.08)
+                    actual_size = int(float(size_matched) * 100) / 100.0
+                else:
+                    actual_size = original_size
+                    
+                print(f"⚙️ [Воркер] Фактически куплено акций: {actual_size}. Отправляю Тейк-Профит...")
+                
+                tp_args = OrderArgs(price=tp_price, size=actual_size, side=SELL, token_id=token_id)
                 tp_resp = client.create_and_post_order(order_args=tp_args, options=options, order_type=OrderType.GTC)
                 
                 if tp_resp and tp_resp.get("success"):
-                    print(f"✅ [Воркер] ТЕЙК-ПРОФИТ {tp_price}$ УСПЕШНО ВЫСТАВЛЕН! ID: {tp_resp.get('orderID')}")
+                    print(f"✅ [Воркер] ТЕЙК-ПРОФИТ {tp_price}$ УСПЕШНО ВЫСТАВЛЕН НА {actual_size} АКЦИЙ! ID: {tp_resp.get('orderID')}")
                     break
                 else:
                     error_msg = str(tp_resp)
                     if "not enough balance" in error_msg:
-                        print("⏳ [Воркер] Блокчейн задерживает токены (Balance: 0). Ждем 1 сек...")
+                        print("⏳ [Воркер] Блокчейн докидывает последние копейки. Ждем 1 сек...")
                         time.sleep(1)
-                        continue  # Уходим на следующий круг
+                        continue
                     else:
                         print(f"❌ [Воркер] Непредвиденная ошибка ТП: {error_msg}")
                         break
@@ -64,7 +73,7 @@ def monitor_and_place_tp(client: ClobClient, order_id: str, tp_price: float, siz
                 break
                 
         except Exception as e:
-            pass # Игнорируем скачки коннекта с Полимаркетом
+            pass 
         
         time.sleep(1)
 
@@ -77,7 +86,6 @@ def place_order(req: TradeRequest, background_tasks: BackgroundTasks):
     order_type_str = "ОТЛОЖЕННАЯ ЛИМИТКА" if req.is_custom_limit else "РЫНОЧНЫЙ ОРДЕР"
     print(f"\n🚀 Поступил {order_type_str}: {req.side} по цене {safe_price}$")
     
-    # 1. 🛡️ Логика депозита (от 5$ и выше с процентным соотношением)
     if req.bankroll < 5.00:
         return {"success": False, "error": f"Банкролл ({req.bankroll}$) меньше $5."}
         
@@ -93,7 +101,6 @@ def place_order(req: TradeRequest, background_tasks: BackgroundTasks):
         is_neg_risk = client.get_neg_risk(str(req.token_id))
         options = PartialCreateOrderOptions(tick_size="0.01", neg_risk=is_neg_risk)
 
-        # 2. 🟢 Выставляем основной ордер (Вход)
         main_args = OrderArgs(price=safe_price, size=safe_size, side=side_const, token_id=str(req.token_id))
         resp = client.create_and_post_order(order_args=main_args, options=options, order_type=OrderType.GTC)
         
@@ -101,7 +108,6 @@ def place_order(req: TradeRequest, background_tasks: BackgroundTasks):
             main_order_id = resp.get('orderID')
             print(f"✅ ОСНОВНОЙ ОРДЕР УСПЕШНО ОТПРАВЛЕН! ID: {main_order_id}")
             
-            # 3. 🔴 Логика автоматического Тейк-Профита
             if req.take_profit_price and req.side.upper() == "BUY":
                 safe_tp_price = round(float(req.take_profit_price), 2)
                 print(f"⏳ Передаю Тейк-Профит на {safe_tp_price}$ фоновому Воркеру...")
@@ -111,7 +117,7 @@ def place_order(req: TradeRequest, background_tasks: BackgroundTasks):
                     client=client, 
                     order_id=main_order_id, 
                     tp_price=safe_tp_price, 
-                    size=safe_size, 
+                    original_size=safe_size, 
                     token_id=str(req.token_id), 
                     options=options
                 )

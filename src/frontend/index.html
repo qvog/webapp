@@ -47,13 +47,16 @@
         .price-green { color: #3fb950; font-size: 28px; font-weight: bold; }
         .price-red { color: #f85149; font-size: 28px; font-weight: bold; }
         
-        /* Стили для кастомной лимитки (Аккуратно вписаны в твой дизайн) */
+        /* 🎯 Новые стили для объема ликвидности */
+        .depth-info { color: #8b949e; font-size: 12px; margin-top: 5px; } 
+
         .custom-limit-box { background-color: #0d1117; border: 1px solid #30363d; padding: 15px; border-radius: 8px; display: flex; gap: 15px; align-items: center; margin-bottom: 20px; }
         .custom-limit-input { background-color: #161b22; color: #c9d1d9; border: 1px solid #58a6ff; padding: 10px; border-radius: 6px; width: 80px; font-size: 16px; font-weight: bold; text-align: center; outline: none; }
         .btn-custom { background-color: #1f2e4d; color: #58a6ff; border: 1px solid #58a6ff; padding: 10px; border-radius: 6px; cursor: pointer; font-weight: bold; flex: 1; transition: 0.2s; }
         .btn-custom:hover:not(:disabled) { background-color: #2f4473; color: white; }
         
         .slider-container { margin-top: 20px; background-color: #0d1117; padding: 15px; border-radius: 8px; border: 1px solid #30363d;}
+        
         .strategies { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 20px; }
         .strat-btn { background-color: #21262d; border: 1px solid #30363d; color: #c9d1d9; padding: 12px; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: bold; transition: 0.2s; }
         .strat-btn:hover { border-color: #8b949e; }
@@ -61,12 +64,28 @@
         
         .calc-box { background-color: #0d1117; border: 1px solid #30363d; padding: 15px; border-radius: 8px; margin-top: 20px; }
         .calc-row { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 15px; }
-        .btn-confirm { width: 100%; background-color: #238636; color: white; border: none; padding: 15px; border-radius: 8px; font-size: 18px; font-weight: bold; margin-top: 15px; cursor: pointer; transition: 0.2s;}
-        .btn-confirm:disabled { background-color: #21262d; color: #8b949e; cursor: not-allowed; }
+        .btn-confirm { width: 100%; border: none; padding: 15px; border-radius: 8px; font-size: 18px; font-weight: bold; margin-top: 15px; cursor: pointer; transition: 0.2s; color: white; background-color: #21262d;}
+        .btn-confirm:disabled { background-color: #21262d !important; color: #8b949e !important; cursor: not-allowed; }
         
         .btn-page { background-color: #21262d; color: #c9d1d9; border: 1px solid #30363d; padding: 8px 15px; border-radius: 6px; cursor: pointer; font-weight: bold; }
         .btn-page:hover:not(:disabled) { border-color: #8b949e; }
         .btn-page:disabled { opacity: 0.5; cursor: not-allowed; }
+        
+        .hidden-sure-btn { cursor:pointer; font-size: 11px; color: #484f58; transition: 0.2s; font-weight: bold; }
+        .hidden-sure-btn:hover { color: #f85149; }
+        .hidden-sure-btn.active { color: #f85149; text-decoration: underline; }
+
+        /* 🎯 Стили для Live-Позиций */
+        .positions-container { margin-top: 20px; border-top: 1px solid #30363d; padding-top: 15px; }
+        .pos-card { background-color: #0d1117; border: 1px solid #30363d; padding: 12px; border-radius: 6px; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center;}
+        .pos-info { display: flex; flex-direction: column; gap: 4px; }
+        .pos-name { font-weight: bold; font-size: 14px; color: #c9d1d9; }
+        .pos-details { font-size: 12px; color: #8b949e; }
+        .pos-pnl { font-weight: bold; font-size: 15px; }
+        .pos-pnl.profit { color: #3fb950; }
+        .pos-pnl.loss { color: #f85149; }
+        .btn-panic { background-color: #da3633; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 12px; }
+        .btn-panic:hover { background-color: #b02a27; }
     </style>
 </head>
 <body>
@@ -119,14 +138,15 @@
                     <div id="quote-1" class="quote-item selected" onclick="selectTeam(1)">
                         <div id="out1-name" style="color: #c9d1d9; margin-bottom: 10px; font-weight: bold; font-size: 16px;">Команда 1</div>
                         <div style="color: #8b949e; font-size: 13px;">Цена за акцию:<br><span class="price-green" style="display: block; margin-top: 8px;">-</span></div>
+                        <div class="depth-info" id="depth-1">Доступно: $0</div>
                     </div>
                     <div id="quote-2" class="quote-item" onclick="selectTeam(2)">
                         <div id="out2-name" style="color: #c9d1d9; margin-bottom: 10px; font-weight: bold; font-size: 16px;">Команда 2</div>
                         <div style="color: #8b949e; font-size: 13px;">Цена за акцию:<br><span class="price-red" style="display: block; margin-top: 8px;">-</span></div>
+                        <div class="depth-info" id="depth-2">Доступно: $0</div>
                     </div>
                 </div>
 
-                <!-- БЛОК ЛИМИТНОГО ОРДЕРА -->
                 <div class="custom-limit-box">
                     <div style="font-size: 13px; color: #8b949e;">ЛИМИТНЫЙ<br>ОРДЕР</div>
                     <input type="number" id="custom-price-in" class="custom-limit-input" placeholder="Вход ¢" min="1" max="99">
@@ -140,18 +160,29 @@
                 </div>
 
                 <div class="strategies">
-                    <button class="strat-btn" onclick="selectStrategy('draft', 2.5, this)">ДРАФТ [2.5%]</button>
-                    <button class="strat-btn" onclick="selectStrategy('match', 5.0, this)">ИСХОД [5%]</button>
-                    <button class="strat-btn" onclick="selectStrategy('roshan', 1.5, this)">РОШАН [1.5%]</button>
-                    <button class="strat-btn" onclick="selectStrategy('sure', 20.0, this)">ВЕРНЯК [20%]</button>
+                    <button class="strat-btn" onclick="selectStrategy('4c', 2.5, this)">4 ЦЕНТА [2.5%]</button>
+                    <button class="strat-btn" onclick="selectStrategy('8c', 1.5, this)">8 ЦЕНТОВ [1.5%]</button>
+                    <button class="strat-btn" style="grid-column: span 2;" onclick="selectStrategy('match', 5.0, this)">ИСХОД [5%]</button>
+                </div>
+                
+                <div style="text-align: right; margin-top: 8px; padding-right: 5px;">
+                    <span id="hidden-sure" class="hidden-sure-btn" onclick="selectStrategy('sure', 20.0, this)">⚠ ВЕРНЯК [20%]</span>
                 </div>
 
                 <div id="calculator" class="calc-box hidden">
                     <div class="calc-row"><span>Вход (USDC):</span> <strong id="calc-size">-</strong></div>
                     <div class="calc-row"><span>Кол-во акций:</span> <strong id="calc-shares">-</strong></div>
                     <div class="calc-row" style="color: #58a6ff; margin-top: 10px;"><span>Тейк-профит (Выход):</span> <strong id="calc-tp">-</strong></div>
-                    <div class="calc-row" style="color: #f85149;"><span>Стоп-лосс (Сброс):</span> <strong id="calc-sl">-</strong></div>
+                    <div class="calc-row" style="color: #f85149;"><span>Стоп-лосс (Ориентир):</span> <strong id="calc-sl">-</strong></div>
                     <button id="btn-submit-order" class="btn-confirm" onclick="confirmOrder()">КУПИТЬ ПО РЫНКУ</button>
+                </div>
+
+                <!-- 🎯 БЛОК АКТИВНЫХ ПОЗИЦИЙ -->
+                <div class="positions-container">
+                    <h4 style="margin: 0 0 10px 0; color: #c9d1d9;">Открытые сделки</h4>
+                    <div id="live-positions-list">
+                        <div style="color: #8b949e; font-size: 13px; text-align: center; padding: 10px;" id="empty-pos-msg">Нет активных позиций</div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -165,6 +196,9 @@
     let activeTeam = 1; 
     let priceOut1 = 0;
     let priceOut2 = 0;
+    let depthOut1 = 0; // 🎯 Объем в акциях
+    let depthOut2 = 0;
+    
     let activeRisk = 0;
     let activeStrat = "";
     
@@ -175,10 +209,80 @@
     let currentEventObj = null;
     let currentSubMarket = null; 
 
+    let myPositions = []; // 🎯 Хранилище позиций
+
     function formatVolume(val) {
         if (!val || val === 0) return '$0';
         if (val >= 1000) return '$' + (val / 1000).toFixed(2) + 'K';
         return '$' + Math.round(val);
+    }
+
+    // 🎯 ФУНКЦИИ УПРАВЛЕНИЯ ПОЗИЦИЯМИ
+    function addPosition(orderId, teamId, teamName, entryPriceCents, sharesAmt) {
+        document.getElementById('empty-pos-msg')?.remove();
+        myPositions.push({ id: orderId, teamId: teamId, name: teamName, entry: entryPriceCents, shares: sharesAmt });
+        renderPositions();
+    }
+
+    function removePosition(orderId) {
+        myPositions = myPositions.filter(p => p.id !== orderId);
+        renderPositions();
+        if(myPositions.length === 0) {
+            document.getElementById('live-positions-list').innerHTML = `<div style="color: #8b949e; font-size: 13px; text-align: center; padding: 10px;" id="empty-pos-msg">Нет активных позиций</div>`;
+        }
+    }
+
+    function renderPositions() {
+        if(myPositions.length === 0) return;
+        const container = document.getElementById('live-positions-list');
+        container.innerHTML = '';
+        
+        myPositions.forEach(pos => {
+            let currentMarketPrice = pos.teamId === 1 ? priceOut1 : priceOut2;
+            if(currentMarketPrice === 0) currentMarketPrice = pos.entry; 
+
+            let diffCents = currentMarketPrice - pos.entry;
+            let pnlUsd = (diffCents / 100) * pos.shares;
+            
+            let pnlClass = pnlUsd >= 0 ? 'profit' : 'loss';
+            let pnlSign = pnlUsd > 0 ? '+' : '';
+
+            container.innerHTML += `
+                <div class="pos-card" id="pos-${pos.id}">
+                    <div class="pos-info">
+                        <span class="pos-name">${pos.name}</span>
+                        <span class="pos-details">Вход: ${pos.entry}¢ | Рынок: ${currentMarketPrice}¢ | Акций: ${pos.shares.toFixed(1)}</span>
+                    </div>
+                    <div style="display:flex; align-items:center; gap:15px;">
+                        <span class="pos-pnl ${pnlClass}">${pnlSign}$${pnlUsd.toFixed(2)}</span>
+                        <button class="btn-panic" onclick="panicSell('${pos.id}')">✖ СБРОС</button>
+                    </div>
+                </div>
+            `;
+        });
+    }
+
+    async function panicSell(orderId) {
+        const btn = document.querySelector(`#pos-${orderId} .btn-panic`);
+        btn.innerText = "ОТПРАВКА..."; btn.disabled = true;
+        try {
+            const res = await fetch('/api/panic_sell', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ order_id: orderId })
+            });
+            const data = await res.json();
+            if(data.success) {
+                alert('Позиция успешно сброшена по рынку!');
+                removePosition(orderId);
+            } else {
+                alert(`Ошибка сброса: ${data.error}`);
+                btn.innerText = "✖ СБРОС"; btn.disabled = false;
+            }
+        } catch(e) {
+            alert('Ошибка соединения с сервером');
+            btn.innerText = "✖ СБРОС"; btn.disabled = false;
+        }
     }
 
     function formatEventTime(dateStr) {
@@ -253,12 +357,22 @@
                 const bid = Math.round(data.bid * 100);
                 const ask = Math.round(data.ask * 100);
                 
+                // 🎯 Парсим объем ликвидности
+                depthOut1 = data.ask_size ? parseFloat(data.ask_size) : 0;
+                depthOut2 = data.bid_size ? parseFloat(data.bid_size) : 0;
+
                 priceOut1 = ask; 
                 priceOut2 = 100 - bid;
                 
                 document.querySelector('.price-green').innerText = priceOut1 > 0 ? priceOut1 + '¢' : '-';
                 document.querySelector('.price-red').innerText = (priceOut2 > 0 && priceOut2 < 100) ? priceOut2 + '¢' : '-';
                 
+                // 🎯 Выводим объем в долларах
+                const dUsd1 = (depthOut1 * (priceOut1/100)).toFixed(2);
+                const dUsd2 = (depthOut2 * (priceOut2/100)).toFixed(2);
+                document.getElementById('depth-1').innerText = depthOut1 > 0 ? `Доступно: $${dUsd1}` : 'Доступно: ?';
+                document.getElementById('depth-2').innerText = depthOut2 > 0 ? `Доступно: $${dUsd2}` : 'Доступно: ?';
+
                 const spreadEl = document.getElementById('spread-value');
                 if (ask === 0 && bid === 0) {
                     spreadEl.innerHTML = `<span style="color:#8b949e;">Рынок пуст (Нет ликвидности)</span>`;
@@ -272,6 +386,7 @@
                 }
                 
                 if (activeRisk > 0) recalculate();
+                renderPositions(); // 🎯 Обновляем PnL на лету
             }
         };
     }
@@ -290,9 +405,12 @@
         document.getElementById('out2-name').innerText = "Команда 2";
         document.querySelector('.price-green').innerText = '-';
         document.querySelector('.price-red').innerText = '-';
+        document.getElementById('depth-1').innerText = 'Доступно: $0';
+        document.getElementById('depth-2').innerText = 'Доступно: $0';
         document.getElementById('spread-value').innerText = 'Ожидание выбора...';
         document.getElementById('calculator').classList.add('hidden');
         document.querySelectorAll('.strat-btn').forEach(btn => btn.classList.remove('active'));
+        document.getElementById('hidden-sure').classList.remove('active');
         selectTeam(1);
         priceOut1 = 0; priceOut2 = 0; activeRisk = 0;
         document.getElementById('custom-price-in').value = '';
@@ -313,7 +431,14 @@
 
     function selectStrategy(type, riskPct, btnElement) {
         document.querySelectorAll('.strat-btn').forEach(btn => btn.classList.remove('active'));
-        btnElement.classList.add('active');
+        document.getElementById('hidden-sure').classList.remove('active');
+        
+        if (btnElement.tagName === 'SPAN') {
+            btnElement.classList.add('active'); // Активация скрытого верняка
+        } else {
+            btnElement.classList.add('active');
+        }
+        
         activeRisk = riskPct; activeStrat = type;
         document.getElementById('calculator').classList.remove('hidden');
         recalculate();
@@ -321,37 +446,55 @@
 
     function recalculate() {
         const p = activeTeam === 1 ? priceOut1 : priceOut2;
+        const currentDepth = activeTeam === 1 ? depthOut1 : depthOut2;
+        const teamName = activeTeam === 1 ? currentSubMarket.out1 : currentSubMarket.out2;
         const submitBtn = document.getElementById('btn-submit-order');
+        
         if (p <= 0 || p >= 100) {
             document.getElementById('calc-size').innerText = "-";
             document.getElementById('calc-shares').innerText = "-";
             document.getElementById('calc-tp').innerText = "-";
             document.getElementById('calc-sl').innerText = "-";
-            submitBtn.disabled = true; submitBtn.innerText = "РЫНОК НЕДОСТУПЕН"; return;
+            submitBtn.disabled = true; 
+            submitBtn.innerText = "РЫНОК НЕДОСТУПЕН"; 
+            submitBtn.style.backgroundColor = "#21262d";
+            return;
         }
         submitBtn.disabled = false;
-        submitBtn.innerText = `КУПИТЬ ЗА ${p}¢`;
+        
+        // 🎯 Динамическое название и цвет кнопки
+        submitBtn.innerText = `КУПИТЬ ${teamName.toUpperCase()} ЗА ${p}¢`;
+        submitBtn.style.backgroundColor = activeTeam === 1 ? '#238636' : '#da3633';
         
         const bankroll = parseInt(document.getElementById('bankroll-slider').value);
         let target_usd = bankroll * (activeRisk / 100);
         let display_amount = Math.min(bankroll, Math.max(5.00, target_usd));
+        let expectedShares = display_amount / (p / 100);
         
         document.getElementById('calc-size').innerText = "~" + display_amount.toFixed(2) + " USDC";
-        document.getElementById('calc-shares').innerText = "Сервер рассчитает (Мин. $5)";
+        document.getElementById('calc-shares').innerText = "~" + expectedShares.toFixed(1) + " шт.";
+
+        // 🎯 Проверка на проскальзывание
+        if (currentDepth > 0 && expectedShares > currentDepth) {
+            submitBtn.style.backgroundColor = "#b08800"; // Предупреждающий желтый
+            submitBtn.innerText = `⚠️ МАЛО ОБЪЕМА! КУПИТЬ ${teamName.toUpperCase()}`;
+        }
         
         let tpStr = "Только ручной выход";
         let p_dec = p / 100;
         
-        if (activeStrat === 'draft' || activeStrat === 'roshan') {
-            let delta_tp = activeStrat === 'roshan' ? 0.5 : 0.3;
-            let calc_tp_dec = p_dec + (delta_tp * (1 - p_dec));
+        if (activeStrat === '4c' || activeStrat === '8c') {
+            let delta_tp = activeStrat === '8c' ? 0.08 : 0.04;
+            let calc_tp_dec = p_dec + delta_tp;
             tpStr = Math.round(Math.min(0.99, calc_tp_dec) * 100) + "¢";
         }
         
-        let delta_sl = 0.4;
-        if (activeStrat === 'sure') delta_sl = 0.5;
-        if (activeStrat === 'roshan') delta_sl = 0.2;
-        let slStr = Math.max(1, Math.round((p_dec - (delta_sl * p_dec)) * 100)) + "¢";
+        let slStr = "-";
+        if (activeStrat === '4c' || activeStrat === '8c') {
+            slStr = Math.max(1, Math.round((p_dec - 0.12) * 100)) + "¢ (Фикс -12¢)";
+        } else if (activeStrat === 'match' || activeStrat === 'sure') {
+            slStr = Math.max(1, Math.round((p_dec * 0.5) * 100)) + "¢ (Падение 50%)";
+        }
 
         document.getElementById('calc-tp').innerText = tpStr;
         document.getElementById('calc-sl').innerText = slStr;
@@ -362,15 +505,14 @@
         const submitBtn = document.getElementById('btn-submit-order');
         const price = activeTeam === 1 ? priceOut1 : priceOut2;
         const bankroll = parseFloat(document.getElementById('bankroll-slider').value);
-        
+        const teamName = activeTeam === 1 ? currentSubMarket.out1 : currentSubMarket.out2;
         const targetToken = activeTeam === 1 ? currentSubMarket.token_id_yes : currentSubMarket.token_id_no;
         if (!targetToken) { alert("Ошибка: У исхода нет токена."); return; }
         
         let tp_payload = null;
-        if (activeStrat === 'draft' || activeStrat === 'roshan') {
-            let p_dec = price / 100;
-            let delta_tp = activeStrat === 'roshan' ? 0.5 : 0.3;
-            let calc_tp_dec = p_dec + (delta_tp * (1 - p_dec));
+        if (activeStrat === '4c' || activeStrat === '8c') {
+            let delta_tp = activeStrat === '8c' ? 0.08 : 0.04;
+            let calc_tp_dec = (price / 100) + delta_tp;
             tp_payload = parseFloat(Math.min(0.99, calc_tp_dec).toFixed(2));
         }
         
@@ -396,6 +538,10 @@
             const data = await res.json();
             
             if(data.success) {
+                let invested = Math.max(5.00, bankroll * (activeRisk / 100));
+                let sharesBought = invested / (price / 100);
+                addPosition(data.order_id, activeTeam, teamName, price, sharesBought);
+
                 if(data.tp_order_id || tp_payload) {
                     alert(`✅ ОРДЕР КУПЛЕН!\nТейк-профит успешно выставлен (см. логи сервера).\nID: ${data.order_id}`);
                 } else {
@@ -406,7 +552,7 @@
             }
         } catch (e) { alert("❌ Ошибка соединения."); }
         
-        submitBtn.innerText = `КУПИТЬ ЗА ${price}¢`; submitBtn.disabled = false;
+        recalculate(); 
     }
 
     async function confirmCustomOrder() {
@@ -421,7 +567,7 @@
         }
         
         if (activeRisk === 0) {
-            alert("Сначала выберите стратегию (Драфт, Исход и т.д.), чтобы рассчитать объем.");
+            alert("Сначала выберите стратегию (4ц, 8ц, Исход и т.д.), чтобы рассчитать объем.");
             return;
         }
 
@@ -454,7 +600,7 @@
             
             if(data.success) {
                 if(requestBody.take_profit_price) {
-                    alert(`✅ СЕТКА ВЫСТАВЛЕНА!\nВход: ${priceInCents}¢. Сервер ждет исполнения, чтобы кинуть тейк на ${priceOutCents}¢.\nID: ${data.order_id}`);
+                    alert(`✅ ЛИМИТКА ВЫСТАВЛЕНА!\nВход: ${priceInCents}¢. Сервер ждет исполнения, чтобы кинуть тейк на ${priceOutCents}¢.\nID: ${data.order_id}`);
                 } else {
                     alert(`✅ ЛИМИТКА ВЫСТАВЛЕНА (БЕЗ ТЕЙКА)!\nВход: ${priceInCents}¢.\nID: ${data.order_id}`);
                 }
