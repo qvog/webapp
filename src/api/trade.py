@@ -1,5 +1,7 @@
 import os
 import time
+import asyncio
+import functools
 from fastapi import APIRouter, BackgroundTasks
 from pydantic import BaseModel
 from typing import Optional
@@ -14,6 +16,9 @@ if PROXY_URL:
     os.environ["https_proxy"] = PROXY_URL
     os.environ["HTTP_PROXY"] = PROXY_URL
     os.environ["HTTPS_PROXY"] = PROXY_URL
+    print(f"✅ ПРОКСИ УСПЕШНО ЗАГРУЖЕН: {PROXY_URL}") # <--- ДОБАВЬТЕ ЭТО
+else:
+    print("❌ ВНИМАНИЕ: ПРОКСИ НЕ НАЙДЕН В .env! Работаю с реального IP!")
 
 from py_clob_client_v2 import ClobClient, OrderArgs, PartialCreateOrderOptions, OrderType, SignatureTypeV2, ApiCreds
 from py_clob_client_v2.order_builder.constants import BUY, SELL
@@ -25,6 +30,34 @@ CHAIN_ID = 137
 PRIVATE_KEY = os.getenv("POLY_PRIVATE_KEY")
 FUNDER_ADDRESS = os.getenv("POLY_FUNDER_ADDRESS")
 
+
+# ==========================================
+# ОПТИМИЗАЦИЯ 1: Обертка для синхронных вызовов библиотеки
+# ==========================================
+async def run_sync(func, *args, **kwargs):
+    """Выполняет синхронные вызовы ClobClient в фоновом пуле потоков, не блокируя сервер."""
+    loop = asyncio.get_running_loop()
+    pfunc = functools.partial(func, *args, **kwargs)
+    return await loop.run_in_executor(None, pfunc)
+
+
+# ==========================================
+# ОПТИМИЗАЦИЯ 2: Глобальный (кэшированный) клиент
+# ==========================================
+_clob_client = None
+
+def get_clob_client() -> ClobClient:
+    """Инициализирует клиент 1 раз при первом обращении, экономя время на SSL и память."""
+    global _clob_client
+    if _clob_client is None:
+        if not PRIVATE_KEY or not FUNDER_ADDRESS:
+            raise ValueError("Не настроены приватные ключи в .env")
+        _clob_client = ClobClient(host=HOST, key=PRIVATE_KEY, chain_id=CHAIN_ID, signature_type=SignatureTypeV2.POLY_1271, funder=FUNDER_ADDRESS)
+        api_creds = ApiCreds(api_key=os.getenv("POLY_API_KEY"), api_secret=os.getenv("POLY_API_SECRET"), api_passphrase=os.getenv("POLY_API_PASSPHRASE"))
+        _clob_client.set_api_creds(api_creds)
+    return _clob_client
+
+
 class TradeRequest(BaseModel):
     token_id: str
     price: float
@@ -34,18 +67,23 @@ class TradeRequest(BaseModel):
     take_profit_price: Optional[float] = None
     is_custom_limit: bool = False
 
-def monitor_and_manage_position(client: ClobClient, order_id: str, entry_price: float, tp_price: float, original_size: float, token_id: str, options, strategy: str):
+
+# ==========================================
+# ОПТИМИЗАЦИЯ 3: Полностью асинхронный воркер
+# ==========================================
+async def monitor_and_manage_position(order_id: str, entry_price: float, tp_price: float, original_size: float, token_id: str, options, strategy: str):
     print(f"👀 [Воркер] Наблюдаю за входом {order_id} (Стратегия: {strategy.upper()})...")
     
-    # ==========================================
+    client = get_clob_client()
+    
     # ФАЗА 1: ЖДЕМ ПОКУПКУ
-    # ==========================================
     actual_size = 0
     is_filled = False
     
     for _ in range(86400):
         try:
-            order_info = client.get_order(order_id)
+            # Асинхронный вызов синхронного метода API
+            order_info = await run_sync(client.get_order, order_id)
             order_data = order_info[0] if isinstance(order_info, list) and len(order_info) > 0 else order_info
             status = order_data.get('status', '')
             
@@ -64,33 +102,33 @@ def monitor_and_manage_position(client: ClobClient, order_id: str, entry_price: 
                 print(f"⚠️ [Воркер] Базовый ордер отменен. Отключаюсь.")
                 return
         except Exception: pass
-        time.sleep(1)
+        
+        await asyncio.sleep(1) # Неблокирующая пауза!
         
     if not is_filled or actual_size == 0:
         print(f"⏳ [Воркер] Истек TTL ожидания покупки. Отключаюсь.")
         return
 
-    # ==========================================
     # ФАЗА 2: ТЕЙК-ПРОФИТ
-    # ==========================================
     tp_order_id = None
     if tp_price:
         for _ in range(10):
             try:
                 tp_args = OrderArgs(price=tp_price, size=actual_size, side=SELL, token_id=token_id)
-                tp_resp = client.create_and_post_order(order_args=tp_args, options=options, order_type=OrderType.GTC)
+                tp_resp = await run_sync(client.create_and_post_order, order_args=tp_args, options=options, order_type=OrderType.GTC)
                 
                 if tp_resp and tp_resp.get("success"):
                     tp_order_id = tp_resp.get('orderID')
                     print(f"✅ [Воркер] ТЕЙК-ПРОФИТ ВЫСТАВЛЕН! ID: {tp_order_id}")
                     break
-                elif "not enough balance" in str(tp_resp):
-                    time.sleep(1)
-            except Exception: pass
+                else:
+                    print(f"⚠️ [Воркер] Ошибка ТП, пробую еще раз: {tp_resp}")
+            except Exception as e:
+                print(f"⚠️ [Воркер] Исключение при выставлении ТП: {e}")
+                
+            await asyncio.sleep(1.5)
 
-    # ==========================================
-    # ФАЗА 3: СТОП-ЛОСС РАДАР
-    # ==========================================
+    # ФАЗА 3: СТОП-ЛОСС РАДАР (Логика сохранена на 100%)
     sl_trigger_price = 0
     sell_ratio = 1.0 
     
@@ -105,7 +143,6 @@ def monitor_and_manage_position(client: ClobClient, order_id: str, entry_price: 
         sell_ratio = 1.0
         
     sl_trigger_price = max(0.01, round(sl_trigger_price, 2))
-    
     print(f"🛡️ [Воркер] Стоп-Лосс АКТИВЕН: Сброс {sell_ratio*100}% при падении до {sl_trigger_price}$ и ниже.")
 
     end_time = time.time() + (14 * 86400)
@@ -115,7 +152,7 @@ def monitor_and_manage_position(client: ClobClient, order_id: str, entry_price: 
         try:
             # 1. Проверяем, не закрылся ли Тейк-Профит
             if tp_order_id and check_tp_counter % 5 == 0:
-                tp_info = client.get_order(tp_order_id)
+                tp_info = await run_sync(client.get_order, tp_order_id)
                 tp_data = tp_info[0] if isinstance(tp_info, list) and len(tp_info) > 0 else tp_info
                 if tp_data.get('status') in ['MATCHED', 'FILLED']:
                     print(f"💰 [Воркер] ТЕЙК-ПРОФИТ СРАБОТАЛ! Позиция закрыта в плюс. Успех!")
@@ -123,62 +160,55 @@ def monitor_and_manage_position(client: ClobClient, order_id: str, entry_price: 
             check_tp_counter += 1
 
             # 2. Сканируем стакан
-            # 2. Сканируем стакан
-            ob = client.get_order_book(token_id)
+            ob = await run_sync(client.get_order_book, token_id)
             bids = ob.get("bids", [])
-            asks = ob.get("asks", []) # 🎯 Теперь берем и продавцов тоже
+            asks = ob.get("asks", [])
             
             if bids:
                 best_bid = max([float(b['price']) for b in bids])
                 best_ask = min([float(a['price']) for a in asks]) if asks else 1.0
+                spread = best_ask - best_bid 
                 
-                spread = best_ask - best_bid # 🎯 Высчитываем ширину дыры в стакане
-                
-                # 🚨 ТРИГГЕР СТОП-ЛОССА С ЗАЩИТОЙ ОТ СКВИЗОВ
+                # ТРИГГЕР СТОП-ЛОССА С ЗАЩИТОЙ ОТ СКВИЗОВ
                 if 0 < best_bid <= sl_trigger_price:
-                    
-                    if spread > 0.35: # 🛡️ АНТИ-СКВИЗ: Если спред больше 15 центов, это ложная тревога
+                    if spread > 0.35:
                         print(f"⚠️ [Воркер] Игнорирую Стоп-Лосс! Аномальный спред: {spread:.2f}$. Жду возврата ликвидности...")
-                        time.sleep(2)
-                        continue # Пропускаем продажу и идем на следующий круг цикла
+                        await asyncio.sleep(2)
+                        continue 
                         
                     print(f"🚨 [Воркер] СТОП-ЛОСС ПРОБИТ! Рынок рухнул до {best_bid}$ (Триггер: {sl_trigger_price}$)")
                     
-                    # Разблокировка акций
                     if tp_order_id:
                         print(f"⚙️ [Воркер] Снимаем ловушку Тейк-Профита...")
                         try:
-                            client.cancel(tp_order_id)
+                            await run_sync(client.cancel, tp_order_id)
                         except Exception as e:
                             print(f"⚠️ Ошибка точечной отмены ({e}). Делаю полную очистку ордеров токена...")
-                            client.cancel_all_orders(token_id=str(token_id))
-                        time.sleep(1.5)
+                            await run_sync(client.cancel_all_orders, token_id=str(token_id))
+                        await asyncio.sleep(1.5)
                     
-                    # Экстренная продажа
                     shares_to_sell = round(actual_size * sell_ratio, 2)
                     print(f"🔥 [Воркер] АВАРИЙНЫЙ СБРОС ПО РЫНКУ: Кидаем {shares_to_sell} акций в стакан!")
                     
                     sell_args = OrderArgs(price=0.01, size=shares_to_sell, side=SELL, token_id=token_id)
-                    sl_resp = client.create_and_post_order(order_args=sell_args, options=options, order_type=OrderType.GTC)
+                    sl_resp = await run_sync(client.create_and_post_order, order_args=sell_args, options=options, order_type=OrderType.GTC)
                     
                     if sl_resp and sl_resp.get("success"):
                         print(f"✅ [Воркер] Стоп-Лосс успешно ликвидировал позицию.")
                     else:
                         print(f"❌ [Воркер] ОШИБКА ПРИ СБРОСЕ (Ордер отклонен): {sl_resp}")
-                    
-                    return # Убиваем процесс, защита отработала!
+                    return 
 
         except Exception as e:
-            # Больше никаких скрытых ошибок! Все выводим на экран.
             print(f"⚠️ [Воркер] Внутренняя ошибка в цикле слежения: {e}")
             
-        time.sleep(2)
+        await asyncio.sleep(2) # Неблокирующая пауза радара
         
     print("⏳ [Воркер] Истек TTL (14 дней). Воркер отключен.")
 
 
 @router.post("/api/trade")
-def place_order(req: TradeRequest, background_tasks: BackgroundTasks):
+async def place_order(req: TradeRequest, background_tasks: BackgroundTasks):
     safe_price = round(float(req.price), 2)
     side_const = BUY if req.side.upper() == "BUY" else SELL
     
@@ -199,18 +229,13 @@ def place_order(req: TradeRequest, background_tasks: BackgroundTasks):
     safe_size = round(actual_invest / safe_price, 2)
     
     try:
-        if not PRIVATE_KEY or not FUNDER_ADDRESS:
-            return {"success": False, "error": "Не настроены приватные ключи в .env"}
-
-        client = ClobClient(host=HOST, key=PRIVATE_KEY, chain_id=CHAIN_ID, signature_type=SignatureTypeV2.POLY_1271, funder=FUNDER_ADDRESS)
-        api_creds = ApiCreds(api_key=os.getenv("POLY_API_KEY"), api_secret=os.getenv("POLY_API_SECRET"), api_passphrase=os.getenv("POLY_API_PASSPHRASE"))
-        client.set_api_creds(api_creds)
+        client = get_clob_client() # Переиспользуем кэшированный инстанс
         
-        is_neg_risk = client.get_neg_risk(str(req.token_id))
+        is_neg_risk = await run_sync(client.get_neg_risk, str(req.token_id))
         options = PartialCreateOrderOptions(tick_size="0.01", neg_risk=is_neg_risk)
 
         main_args = OrderArgs(price=safe_price, size=safe_size, side=side_const, token_id=str(req.token_id))
-        resp = client.create_and_post_order(order_args=main_args, options=options, order_type=OrderType.GTC)
+        resp = await run_sync(client.create_and_post_order, order_args=main_args, options=options, order_type=OrderType.GTC)
         
         if resp and resp.get("success"):
             main_order_id = resp.get('orderID')
@@ -218,9 +243,9 @@ def place_order(req: TradeRequest, background_tasks: BackgroundTasks):
             
             safe_tp_price = round(float(req.take_profit_price), 2) if req.take_profit_price else None
             
+            # FastAPI умеет корректно запускать async функции как BackgroundTasks
             background_tasks.add_task(
                 monitor_and_manage_position,
-                client=client, 
                 order_id=main_order_id, 
                 entry_price=safe_price,
                 tp_price=safe_tp_price, 
@@ -240,17 +265,17 @@ def place_order(req: TradeRequest, background_tasks: BackgroundTasks):
         print(f"❌ Критическая ошибка торговли: {e}")
         return {"success": False, "error": str(e)}
 
+
 class PanicRequest(BaseModel):
     order_id: str
 
+
 @router.post("/api/panic_sell")
-def panic_sell_position(req: PanicRequest):
+async def panic_sell_position(req: PanicRequest):
     try:
-        client = ClobClient(host=HOST, key=PRIVATE_KEY, chain_id=CHAIN_ID, signature_type=SignatureTypeV2.POLY_1271, funder=FUNDER_ADDRESS)
-        api_creds = ApiCreds(api_key=os.getenv("POLY_API_KEY"), api_secret=os.getenv("POLY_API_SECRET"), api_passphrase=os.getenv("POLY_API_PASSPHRASE"))
-        client.set_api_creds(api_creds)
+        client = get_clob_client() # Переиспользуем кэшированный инстанс
         
-        order_info = client.get_order(req.order_id)
+        order_info = await run_sync(client.get_order, req.order_id)
         order_data = order_info[0] if isinstance(order_info, list) and len(order_info) > 0 else order_info
         
         token_id = order_data.get('asset_id') or order_data.get('token_id')
@@ -259,14 +284,14 @@ def panic_sell_position(req: PanicRequest):
         if size_to_sell == 0:
             return {"success": False, "error": "Ордер еще не исполнен или объем нулевой"}
 
-        client.cancel_all_orders(token_id=str(token_id))
-        time.sleep(1.5) 
+        await run_sync(client.cancel_all_orders, token_id=str(token_id))
+        await asyncio.sleep(1.5) 
         
-        is_neg_risk = client.get_neg_risk(str(token_id))
+        is_neg_risk = await run_sync(client.get_neg_risk, str(token_id))
         options = PartialCreateOrderOptions(tick_size="0.01", neg_risk=is_neg_risk)
         sell_args = OrderArgs(price=0.01, size=size_to_sell, side=SELL, token_id=str(token_id))
         
-        resp = client.create_and_post_order(order_args=sell_args, options=options, order_type=OrderType.GTC)
+        resp = await run_sync(client.create_and_post_order, order_args=sell_args, options=options, order_type=OrderType.GTC)
         
         if resp and resp.get("success"):
             return {"success": True, "message": "Сброшено!"}

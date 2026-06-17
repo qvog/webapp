@@ -121,8 +121,15 @@ async def get_markets(game: str = Query("Dota 2")):
                         token_yes = clob_token_ids[0]
                         token_no = clob_token_ids[1] if len(clob_token_ids) > 1 else ""
                         
-                        liquidity = float(market.get("liquidity", 0))
-                        volume = float(market.get("volume", 0))
+                        # 🛡️ Бронебойный парсинг (защита от null/None)
+                        liq_raw = market.get("liquidity")
+                        vol_raw = market.get("volume")
+                        liquidity = float(liq_raw) if liq_raw is not None else 0.0
+                        volume = float(vol_raw) if vol_raw is not None else 0.0
+                        
+                        # 🎯 Отсекаем мертвые рынки (где пусто и в истории, и в стакане)
+                        if volume == 0.0:
+                            continue
                         
                         events_dict[event_id]["total_volume"] += volume
                         valid_markets_count += 1

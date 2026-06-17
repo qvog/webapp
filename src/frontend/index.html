@@ -304,6 +304,7 @@
     }
 
     function openEventTerminal(eventId) {
+        
         currentEventObj = allMatches.find(e => e.event_id === eventId);
         if (!currentEventObj) return;
 
