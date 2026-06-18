@@ -92,11 +92,11 @@
 
 <div class="container">
     <div id="screen-catalog">
-        <h2 style="margin-bottom: 25px;">Киберспорт Радар</h2>
+        <h2 style="margin-bottom: 25px;">@INMY2</h2>
         
         <div class="filters-container">
             <div class="filters">
-                <button class="filter-btn">Все игры</button>
+                <button class="filter-btn">ALL</button>
                 <button class="filter-btn active">Dota 2</button> 
                 <button class="filter-btn">CS2</button>
                 <button class="filter-btn">LoL</button>
@@ -151,7 +151,7 @@
                     <div style="font-size: 13px; color: #8b949e;">ЛИМИТНЫЙ<br>ОРДЕР</div>
                     <input type="number" id="custom-price-in" class="custom-limit-input" placeholder="Вход ¢" min="1" max="99">
                     <input type="number" id="custom-price-out" class="custom-limit-input" placeholder="Тейк ¢" min="1" max="99">
-                    <button id="btn-custom-order" class="btn-custom" onclick="confirmCustomOrder()">ПОСТАВИТЬ ЛИМИТКУ</button>
+                    <button id="btn-custom-order" class="btn-custom" onclick="confirmCustomOrder()">Limit Order</button>
                 </div>
 
                 <div class="slider-container">
@@ -464,7 +464,7 @@
         submitBtn.disabled = false;
         
         // 🎯 Динамическое название и цвет кнопки
-        submitBtn.innerText = `КУПИТЬ ${teamName.toUpperCase()} ЗА ${p}¢`;
+        submitBtn.innerText = `BUY:  ${teamName.toUpperCase()} ЗА ${p}¢`;
         submitBtn.style.backgroundColor = activeTeam === 1 ? '#238636' : '#da3633';
         
         const bankroll = parseInt(document.getElementById('bankroll-slider').value);
@@ -707,7 +707,7 @@
                         </div>
                     </div>
                     <div>
-                        <button class="btn-trade" onclick="openEventTerminal('${eventItem.event_id}')">Открыть рынки</button>
+                        <button class="btn-trade" onclick="openEventTerminal('${eventItem.event_id}')">OPEN</button>
                     </div>
                 </div>
             `;

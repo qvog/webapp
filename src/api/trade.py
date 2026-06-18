@@ -2,10 +2,15 @@ import os
 import time
 import asyncio
 import functools
+
 from fastapi import APIRouter, BackgroundTasks
 from pydantic import BaseModel
 from typing import Optional
 from dotenv import load_dotenv
+from eth_account import Account
+
+from py_clob_client_v2 import ClobClient, OrderArgs, PartialCreateOrderOptions, OrderType, SignatureTypeV2, ApiCreds
+from py_clob_client_v2.order_builder.constants import BUY, SELL
 
 # 🎯 Загружаем переменные из .env файла
 load_dotenv()
@@ -20,8 +25,9 @@ if PROXY_URL:
 else:
     print("❌ ВНИМАНИЕ: ПРОКСИ НЕ НАЙДЕН В .env! Работаю с реального IP!")
 
-from py_clob_client_v2 import ClobClient, OrderArgs, PartialCreateOrderOptions, OrderType, SignatureTypeV2, ApiCreds
-from py_clob_client_v2.order_builder.constants import BUY, SELL
+pk = os.getenv("POLY_PRIVATE_KEY")
+my_account = Account.from_key(pk)
+print('Derived address:', my_account.address)
 
 router = APIRouter()
 HOST = "https://clob.polymarket.com"
@@ -129,6 +135,9 @@ async def monitor_and_manage_position(order_id: str, entry_price: float, tp_pric
             await asyncio.sleep(1.5)
 
     # ФАЗА 3: СТОП-ЛОСС РАДАР (Логика сохранена на 100%)
+    # ==========================================
+    # ФАЗА 3: СТОП-ЛОСС РАДАР
+    # ==========================================
     sl_trigger_price = 0
     sell_ratio = 1.0 
     
@@ -143,68 +152,99 @@ async def monitor_and_manage_position(order_id: str, entry_price: float, tp_pric
         sell_ratio = 1.0
         
     sl_trigger_price = max(0.01, round(sl_trigger_price, 2))
+    
     print(f"🛡️ [Воркер] Стоп-Лосс АКТИВЕН: Сброс {sell_ratio*100}% при падении до {sl_trigger_price}$ и ниже.")
 
     end_time = time.time() + (14 * 86400)
     check_tp_counter = 0
+    sl_confirmations = 0 # 🎯 НОВОЕ: Счетчик подтверждений для защиты от пустых стаканов
 
     while time.time() < end_time:
         try:
-            # 1. Проверяем, не закрылся ли Тейк-Профит
+            # 1. БЕЗОПАСНАЯ Проверка Тейк-Профита
             if tp_order_id and check_tp_counter % 5 == 0:
-                tp_info = await run_sync(client.get_order, tp_order_id)
-                tp_data = tp_info[0] if isinstance(tp_info, list) and len(tp_info) > 0 else tp_info
-                if tp_data.get('status') in ['MATCHED', 'FILLED']:
-                    print(f"💰 [Воркер] ТЕЙК-ПРОФИТ СРАБОТАЛ! Позиция закрыта в плюс. Успех!")
-                    return 
-            check_tp_counter += 1
+                try:
+                    tp_info = client.get_order(tp_order_id)
+                    tp_data = tp_info[0] if isinstance(tp_info, list) and len(tp_info) > 0 else tp_info
+                    
+                    if isinstance(tp_data, dict): # 🛡️ Защита от 'NoneType'
+                        if tp_data.get('status') in ['MATCHED', 'FILLED']:
+                            print(f"💰 [Воркер] ТЕЙК-ПРОФИТ СРАБОТАЛ! Позиция закрыта в плюс. Успех!")
+                            return 
+                except Exception:
+                    pass # Игнорируем глюки API Полимаркета, проверим на следующем круге
+            
+            # 🎯 Теперь счетчик тикает ВСЕГДА, предотвращая зависание цикла!        
+            check_tp_counter += 1 
 
             # 2. Сканируем стакан
-            ob = await run_sync(client.get_order_book, token_id)
+            ob = client.get_order_book(token_id)
+            if not isinstance(ob, dict): 
+                time.sleep(2)
+                continue
+
             bids = ob.get("bids", [])
-            asks = ob.get("asks", [])
+            asks = ob.get("asks", []) 
             
             if bids:
                 best_bid = max([float(b['price']) for b in bids])
                 best_ask = min([float(a['price']) for a in asks]) if asks else 1.0
+                
                 spread = best_ask - best_bid 
                 
-                # ТРИГГЕР СТОП-ЛОССА С ЗАЩИТОЙ ОТ СКВИЗОВ
+                # ТРИГГЕР СТОП-ЛОССА
                 if 0 < best_bid <= sl_trigger_price:
-                    if spread > 0.35:
+                    
+                    if spread > 0.35: 
                         print(f"⚠️ [Воркер] Игнорирую Стоп-Лосс! Аномальный спред: {spread:.2f}$. Жду возврата ликвидности...")
-                        await asyncio.sleep(2)
+                        sl_confirmations = 0 # Сбрасываем счетчик при сквизе
+                        time.sleep(2)
                         continue 
                         
-                    print(f"🚨 [Воркер] СТОП-ЛОСС ПРОБИТ! Рынок рухнул до {best_bid}$ (Триггер: {sl_trigger_price}$)")
+                    # 🎯 УМНЫЙ СТОП-ЛОСС: Требуем 3 подтверждения падения цены
+                    sl_confirmations += 1
+                    if sl_confirmations < 3:
+                        print(f"⚠️ [Воркер] Внимание! Цена ({best_bid}$) ниже стоп-лосса. Жду подтверждения {sl_confirmations}/3...")
+                        time.sleep(1.5)
+                        continue
+                        
+                    # Если мы дошли сюда, значит стакан был пуст 3 раза подряд (цена реально рухнула)
+                    print(f"🚨 [Воркер] СТОП-ЛОСС ПРОБИТ И ПОДТВЕРЖДЕН! Рынок рухнул до {best_bid}$ (Триггер: {sl_trigger_price}$)")
                     
+                    # Разблокировка акций
                     if tp_order_id:
                         print(f"⚙️ [Воркер] Снимаем ловушку Тейк-Профита...")
                         try:
-                            await run_sync(client.cancel, tp_order_id)
+                            client.cancel(tp_order_id)
                         except Exception as e:
                             print(f"⚠️ Ошибка точечной отмены ({e}). Делаю полную очистку ордеров токена...")
-                            await run_sync(client.cancel_all_orders, token_id=str(token_id))
-                        await asyncio.sleep(1.5)
+                            client.cancel_all_orders(token_id=str(token_id))
+                        time.sleep(1.5)
                     
+                    # Экстренная продажа
                     shares_to_sell = round(actual_size * sell_ratio, 2)
                     print(f"🔥 [Воркер] АВАРИЙНЫЙ СБРОС ПО РЫНКУ: Кидаем {shares_to_sell} акций в стакан!")
                     
                     sell_args = OrderArgs(price=0.01, size=shares_to_sell, side=SELL, token_id=token_id)
-                    sl_resp = await run_sync(client.create_and_post_order, order_args=sell_args, options=options, order_type=OrderType.GTC)
+                    sl_resp = client.create_and_post_order(order_args=sell_args, options=options, order_type=OrderType.GTC)
                     
                     if sl_resp and sl_resp.get("success"):
                         print(f"✅ [Воркер] Стоп-Лосс успешно ликвидировал позицию.")
                     else:
                         print(f"❌ [Воркер] ОШИБКА ПРИ СБРОСЕ (Ордер отклонен): {sl_resp}")
+                    
                     return 
+                    
+                else:
+                    # Если цена прыгнула вниз и сразу вернулась обратно (стакан пересобрался)
+                    if sl_confirmations > 0:
+                        print(f"✅ [Воркер] Ложная тревога. Цена вернулась в норму ({best_bid}$). Стоп-лосс отменен.")
+                    sl_confirmations = 0
 
         except Exception as e:
             print(f"⚠️ [Воркер] Внутренняя ошибка в цикле слежения: {e}")
             
-        await asyncio.sleep(2) # Неблокирующая пауза радара
-        
-    print("⏳ [Воркер] Истек TTL (14 дней). Воркер отключен.")
+        time.sleep(2)
 
 
 @router.post("/api/trade")
@@ -284,7 +324,12 @@ async def panic_sell_position(req: PanicRequest):
         if size_to_sell == 0:
             return {"success": False, "error": "Ордер еще не исполнен или объем нулевой"}
 
-        await run_sync(client.cancel_all_orders, token_id=str(token_id))
+        # 🎯 ИСПРАВЛЕНИЕ: снимаем лимитки перед ударом по рынку
+        try:
+            await run_sync(client.cancel_market_orders, asset_id=str(token_id))
+        except AttributeError:
+            await run_sync(client.cancel_all) # Фоллбэк
+            
         await asyncio.sleep(1.5) 
         
         is_neg_risk = await run_sync(client.get_neg_risk, str(token_id))
