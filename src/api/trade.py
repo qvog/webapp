@@ -6,7 +6,6 @@ import asyncio
 from py_clob_client_v2 import OrderArgs, PartialCreateOrderOptions, OrderType
 from py_clob_client_v2.order_builder.constants import BUY, SELL
 
-# Импорты наших новых модулей
 from src.api.client import get_clob_client, run_sync
 from src.workers.monitor import monitor_and_manage_position
 from src.database.db import SessionLocal
@@ -126,3 +125,28 @@ async def panic_sell_position(req: PanicRequest):
             return {"success": False, "error": str(resp)}
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+@router.get("/api/positions")
+async def get_open_positions():
+    db = SessionLocal()
+    try:
+        # Достаем все сделки, которые сейчас в работе
+        positions = db.query(Position).filter(Position.status == "OPEN").all()
+        
+        pos_list = []
+        for p in positions:
+            pos_list.append({
+                "order_id": p.order_id,
+                "token_id": p.token_id,
+                "entry_price": p.entry_price,
+                "size": p.size,
+                "tp_price": p.tp_price,
+                "sl_trigger_price": p.sl_trigger_price,
+                "strategy": p.strategy
+            })
+            
+        return {"success": True, "positions": pos_list}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+    finally:
+        db.close()

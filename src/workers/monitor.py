@@ -31,11 +31,25 @@ async def monitor_and_manage_position(order_id: str, entry_price: float, tp_pric
                 break
             elif status in ['CANCELED', 'EXPIRED']:
                 print(f"⚠️ [Воркер] Базовый ордер отменен. Отключаюсь.")
+                db = SessionLocal()
+                try:
+                    pos = db.query(Position).filter(Position.order_id == order_id).first()
+                    if pos:
+                        pos.status = "CANCELED"
+                        db.commit()
+                finally: db.close()
                 return
         except Exception: pass
         await asyncio.sleep(1)
         
     if not is_filled or actual_size == 0:
+        db = SessionLocal()
+        try:
+            pos = db.query(Position).filter(Position.order_id == order_id).first()
+            if pos:
+                pos.status = "EXPIRED"
+                db.commit()
+        finally: db.close()
         return
 
     # ФАЗА 2: ТЕЙК-ПРОФИТ
@@ -86,6 +100,7 @@ async def monitor_and_manage_position(order_id: str, entry_price: float, tp_pric
             check_tp_counter += 1 
 
             # 2. Проверка стакана (Стоп-Лосс)
+            # 2. Проверка стакана (Стоп-Лосс)
             ob = await run_sync(client.get_order_book, token_id)
             if not isinstance(ob, dict): 
                 await asyncio.sleep(2)
@@ -97,18 +112,26 @@ async def monitor_and_manage_position(order_id: str, entry_price: float, tp_pric
                 best_ask = min([float(a['price']) for a in asks]) if asks else 1.0
                 spread = best_ask - best_bid 
                 
+                # 🛡️ НОВАЯ ЗАЩИТА ОТ СКВИЗОВ ЛИКВИДНОСТИ
+                # Нормальный спред 1-5 центов. Если спред шире 8 центов - маркет-мейкеры ушли.
+                # Это иллюзия падения. Мы обязаны переждать этот момент!
+                if spread > 0.08:
+                    sl_confirmations = 0
+                    print(f"🛡️ [Воркер] Аномалия стакана (Спред: {round(spread, 2)}$). Игнорирую сквиз!")
+                    await asyncio.sleep(2)
+                    continue 
+                
                 if 0 < best_bid <= sl_trigger_price:
-                    if spread > 0.35: 
-                        sl_confirmations = 0
-                        await asyncio.sleep(2)
-                        continue 
-                        
                     sl_confirmations += 1
-                    if sl_confirmations < 3:
+                    print(f"⚠️ [Воркер] Угроза стоп-лосса! ({best_bid}$ <= {sl_trigger_price}$). Тик: {sl_confirmations}/4")
+                    
+                    if sl_confirmations < 4: # Увеличили время ожидания до 6 секунд
                         await asyncio.sleep(1.5)
                         continue
                         
                     print(f"🚨 [Воркер] СТОП-ЛОСС ПРОБИТ! Цена: {best_bid}$")
+                    
+                    # ... дальше идет ваш код отмены ордеров и продажи по рынку ...
                     
                     if tp_order_id:
                         try: await run_sync(client.cancel_orders, [tp_order_id])

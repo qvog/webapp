@@ -46,8 +46,8 @@
         
         .price-green { color: #3fb950; font-size: 28px; font-weight: bold; }
         .price-red { color: #f85149; font-size: 28px; font-weight: bold; }
+        .spread-safe { color: #3fb950; font-weight: bold; }
         
-        /* 🎯 Новые стили для объема ликвидности */
         .depth-info { color: #8b949e; font-size: 12px; margin-top: 5px; } 
 
         .custom-limit-box { background-color: #0d1117; border: 1px solid #30363d; padding: 15px; border-radius: 8px; display: flex; gap: 15px; align-items: center; margin-bottom: 20px; }
@@ -75,7 +75,6 @@
         .hidden-sure-btn:hover { color: #f85149; }
         .hidden-sure-btn.active { color: #f85149; text-decoration: underline; }
 
-        /* 🎯 Стили для Live-Позиций */
         .positions-container { margin-top: 20px; border-top: 1px solid #30363d; padding-top: 15px; }
         .pos-card { background-color: #0d1117; border: 1px solid #30363d; padding: 12px; border-radius: 6px; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center;}
         .pos-info { display: flex; flex-direction: column; gap: 4px; }
@@ -131,7 +130,7 @@
             <div class="terminal-main">
                 <div style="text-align: center; margin-bottom: 20px; font-size: 15px; color: #8b949e;">
                     <span id="current-market-title" style="color: #c9d1d9; font-weight: bold; display: block; margin-bottom: 10px; font-size: 18px;">Выберите рынок слева</span>
-                    Спред: <span id="spread-value">Ожидание выбора...</span>
+                    Спред: <span id="spread-value">Подключение...</span>
                 </div>
 
                 <div class="quotes-box">
@@ -177,7 +176,6 @@
                     <button id="btn-submit-order" class="btn-confirm" onclick="confirmOrder()">КУПИТЬ ПО РЫНКУ</button>
                 </div>
 
-                <!-- 🎯 БЛОК АКТИВНЫХ ПОЗИЦИЙ -->
                 <div class="positions-container">
                     <h4 style="margin: 0 0 10px 0; color: #c9d1d9;">Открытые сделки</h4>
                     <div id="live-positions-list">
@@ -191,12 +189,13 @@
 
 <script>
     let marketWs = null;
+    let syncInterval = null; // Гарантированный таймер
     let allMatches = [];
     
     let activeTeam = 1; 
     let priceOut1 = 0;
     let priceOut2 = 0;
-    let depthOut1 = 0; // 🎯 Объем в акциях
+    let depthOut1 = 0; 
     let depthOut2 = 0;
     
     let activeRisk = 0;
@@ -208,8 +207,7 @@
     
     let currentEventObj = null;
     let currentSubMarket = null; 
-
-    let myPositions = []; // 🎯 Хранилище позиций
+    let activePositionsCache = []; 
 
     function formatVolume(val) {
         if (!val || val === 0) return '$0';
@@ -217,94 +215,113 @@
         return '$' + Math.round(val);
     }
 
-    // 🎯 ФУНКЦИИ УПРАВЛЕНИЯ ПОЗИЦИЯМИ
-    function addPosition(orderId, teamId, teamName, entryPriceCents, sharesAmt) {
-        document.getElementById('empty-pos-msg')?.remove();
-        myPositions.push({ id: orderId, teamId: teamId, name: teamName, entry: entryPriceCents, shares: sharesAmt });
-        renderPositions();
+    async function fetchOpenPositions() {
+        try {
+            const res = await fetch('/api/positions');
+            const data = await res.json();
+            if (data.success) {
+                const needsFullRender = activePositionsCache.length !== data.positions.length;
+                activePositionsCache = data.positions; 
+                if (needsFullRender) renderPositionsHTML(activePositionsCache);
+                else updateLivePnL();
+            }
+        } catch (e) {}
     }
 
-    function removePosition(orderId) {
-        myPositions = myPositions.filter(p => p.id !== orderId);
-        renderPositions();
-        if(myPositions.length === 0) {
-            document.getElementById('live-positions-list').innerHTML = `<div style="color: #8b949e; font-size: 13px; text-align: center; padding: 10px;" id="empty-pos-msg">Нет активных позиций</div>`;
-        }
-    }
-
-    function renderPositions() {
-        if(myPositions.length === 0) return;
+    function renderPositionsHTML(positions) {
         const container = document.getElementById('live-positions-list');
         container.innerHTML = '';
-        
-        myPositions.forEach(pos => {
-            let currentMarketPrice = pos.teamId === 1 ? priceOut1 : priceOut2;
-            if(currentMarketPrice === 0) currentMarketPrice = pos.entry; 
+        if (!positions || positions.length === 0) {
+            container.innerHTML = `<div style="color: #8b949e; font-size: 13px; text-align: center; padding: 10px;" id="empty-pos-msg">Нет активных позиций</div>`;
+            return;
+        }
 
-            let diffCents = currentMarketPrice - pos.entry;
-            let pnlUsd = (diffCents / 100) * pos.shares;
-            
-            let pnlClass = pnlUsd >= 0 ? 'profit' : 'loss';
-            let pnlSign = pnlUsd > 0 ? '+' : '';
+        positions.forEach(pos => {
+            let teamName = "Неизвестно";
+            let entryCents = Math.round(pos.entry_price * 100);
+            let tpCents = pos.tp_price ? Math.round(pos.tp_price * 100) : null;
+            let slCents = pos.sl_trigger_price ? Math.round(pos.sl_trigger_price * 100) : null;
+
+            for (let match of allMatches) {
+                for (let sub of match.sub_markets) {
+                    if (sub.token_id_yes === pos.token_id) teamName = sub.out1;
+                    else if (sub.token_id_no === pos.token_id) teamName = sub.out2;
+                }
+            }
 
             container.innerHTML += `
-                <div class="pos-card" id="pos-${pos.id}">
+                <div class="pos-card" id="pos-${pos.order_id}">
                     <div class="pos-info">
-                        <span class="pos-name">${pos.name}</span>
-                        <span class="pos-details">Вход: ${pos.entry}¢ | Рынок: ${currentMarketPrice}¢ | Акций: ${pos.shares.toFixed(1)}</span>
+                        <span class="pos-name">${teamName}</span>
+                        <span class="pos-details">Вход: ${entryCents}¢ | Рынок: <span id="mprice-${pos.order_id}">-</span>¢ | Акций: ${pos.size.toFixed(1)}</span>
+                        <span class="pos-details" style="color: #58a6ff;">ТП: ${tpCents ? tpCents + '¢' : 'Нет'} | СЛ: ${slCents}¢</span>
                     </div>
                     <div style="display:flex; align-items:center; gap:15px;">
-                        <span class="pos-pnl ${pnlClass}">${pnlSign}$${pnlUsd.toFixed(2)}</span>
-                        <button class="btn-panic" onclick="panicSell('${pos.id}')">✖ СБРОС</button>
+                        <span class="pos-pnl" id="pnl-${pos.order_id}">-</span>
+                        <button class="btn-panic" onclick="panicSell('${pos.order_id}')">✖ СБРОС</button>
                     </div>
                 </div>
             `;
+        });
+        updateLivePnL(); 
+    }
+
+    function updateLivePnL() {
+        if (!activePositionsCache || activePositionsCache.length === 0) return;
+        activePositionsCache.forEach(pos => {
+            let entryCents = Math.round(pos.entry_price * 100);
+            let currentMarketPrice = entryCents;
+
+            for (let match of allMatches) {
+                for (let sub of match.sub_markets) {
+                    if (sub.token_id_yes === pos.token_id && priceOut1 > 0) currentMarketPrice = priceOut1;
+                    else if (sub.token_id_no === pos.token_id && priceOut2 > 0) currentMarketPrice = priceOut2;
+                }
+            }
+
+            let diffCents = currentMarketPrice - entryCents;
+            let pnlUsd = (diffCents / 100) * pos.size;
+            let pnlClass = pnlUsd >= 0 ? 'profit' : 'loss';
+            let pnlSign = pnlUsd > 0 ? '+' : '';
+
+            const priceSpan = document.getElementById(`mprice-${pos.order_id}`);
+            const pnlSpan = document.getElementById(`pnl-${pos.order_id}`);
+
+            if (priceSpan && priceSpan.innerText != currentMarketPrice) priceSpan.innerText = currentMarketPrice;
+            if (pnlSpan) {
+                pnlSpan.className = `pos-pnl ${pnlClass}`;
+                pnlSpan.innerText = `${pnlSign}$${pnlUsd.toFixed(2)}`;
+            }
         });
     }
 
     async function panicSell(orderId) {
         const btn = document.querySelector(`#pos-${orderId} .btn-panic`);
-        btn.innerText = "ОТПРАВКА..."; btn.disabled = true;
+        if (btn) { btn.innerText = "ОТПРАВКА..."; btn.disabled = true; }
         try {
-            const res = await fetch('/api/panic_sell', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ order_id: orderId })
-            });
+            const res = await fetch('/api/panic_sell', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ order_id: orderId }) });
             const data = await res.json();
-            if(data.success) {
-                alert('Позиция успешно сброшена по рынку!');
-                removePosition(orderId);
-            } else {
-                alert(`Ошибка сброса: ${data.error}`);
-                btn.innerText = "✖ СБРОС"; btn.disabled = false;
-            }
-        } catch(e) {
-            alert('Ошибка соединения с сервером');
-            btn.innerText = "✖ СБРОС"; btn.disabled = false;
-        }
+            if(data.success) { alert('Сброшено!'); fetchOpenPositions(); } 
+            else { alert(`Ошибка: ${data.error}`); if (btn) { btn.innerText = "✖ СБРОС"; btn.disabled = false; } }
+        } catch(e) { alert('Ошибка сети'); if (btn) { btn.innerText = "✖ СБРОС"; btn.disabled = false; } }
     }
 
     function formatEventTime(dateStr) {
         if (!dateStr) return 'ОЖИДАЕТСЯ';
         const d = new Date(dateStr);
         if (isNaN(d.getTime())) return 'ОЖИДАЕТСЯ';
-
         const now = new Date();
         if (d <= now) return 'LIVE'; 
-        
         const timeStr = d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
         const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
         const targetDate = new Date(d.getFullYear(), d.getMonth(), d.getDate());
         const diffDays = Math.round((targetDate - today) / (1000 * 60 * 60 * 24));
-        
         if (diffDays === 0) return `Сегодня, ${timeStr}`;
         if (diffDays === 1) return `Завтра, ${timeStr}`;
         return d.toLocaleDateString('ru-RU', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
     }
 
     function openEventTerminal(eventId) {
-        
         currentEventObj = allMatches.find(e => e.event_id === eventId);
         if (!currentEventObj) return;
 
@@ -314,27 +331,27 @@
         
         const sidebar = document.getElementById('submarkets-sidebar');
         sidebar.innerHTML = '';
-        
         currentEventObj.sub_markets.forEach((sub) => {
             let cleanLabel = sub.question;
-            if (cleanLabel.toLowerCase().includes("map 1")) cleanLabel = "Карта 1 (Победитель)";
-            else if (cleanLabel.toLowerCase().includes("map 2")) cleanLabel = "Карта 2 (Победитель)";
-            else if (cleanLabel.toLowerCase().includes("map 3")) cleanLabel = "Карта 3 (Победитель)";
-            else if (cleanLabel.toLowerCase().includes("winner of the match") || cleanLabel.toLowerCase().includes("match winner")) cleanLabel = "Исход матча (Moneyline)";
+            if (cleanLabel.toLowerCase().includes("map 1")) cleanLabel = "Карта 1";
+            else if (cleanLabel.toLowerCase().includes("map 2")) cleanLabel = "Карта 2";
+            else if (cleanLabel.toLowerCase().includes("map 3")) cleanLabel = "Карта 3";
+            else if (cleanLabel.toLowerCase().includes("winner of the match") || cleanLabel.toLowerCase().includes("match winner")) cleanLabel = "Исход матча";
 
-            const volFormatted = formatVolume(sub.volume);
             sidebar.innerHTML += `
                 <div class="submarket-btn" id="subbtn-${sub.condition_id}" onclick="connectToMarket('${sub.condition_id}')">
                     <div class="sm-title">${cleanLabel}</div>
-                    <div class="sm-vol">Объем: ${volFormatted}</div>
+                    <div class="sm-vol">Объем: ${formatVolume(sub.volume)}</div>
                 </div>
             `;
         });
-        
         resetTerminalUI();
         if (currentEventObj.sub_markets.length > 0) connectToMarket(currentEventObj.sub_markets[0].condition_id);
     }
 
+    // ==============================================================
+    // 🎯 ИДЕАЛЬНАЯ СИНХРОНИЗАЦИЯ: WS + ПРИНУДИТЕЛЬНЫЙ ПОЛЛИНГ
+    // ==============================================================
     function connectToMarket(conditionId) {
         if (!currentEventObj) return;
         currentSubMarket = currentEventObj.sub_markets.find(m => m.condition_id === conditionId);
@@ -347,49 +364,109 @@
         document.getElementById('current-market-title').innerText = currentSubMarket.question;
         document.getElementById('out1-name').innerText = currentSubMarket.out1;
         document.getElementById('out2-name').innerText = currentSubMarket.out2;
-        document.getElementById('spread-value').innerText = "Содержимое стакана...";
         
-        if (marketWs) marketWs.close();
-        marketWs = new WebSocket(`ws://${window.location.host}/ws/market/${conditionId}`);
+        // Очищаем старые соединения
+        if (syncInterval) clearInterval(syncInterval);
+        if (marketWs) { marketWs.onclose = null; marketWs.close(); }
         
-        marketWs.onmessage = function(event) {
-            const data = JSON.parse(event.data);
-            if (data.type === "orderbook_update") {
-                const bid = Math.round(data.bid * 100);
-                const ask = Math.round(data.ask * 100);
-                
-                // 🎯 Парсим объем ликвидности
-                depthOut1 = data.ask_size ? parseFloat(data.ask_size) : 0;
-                depthOut2 = data.bid_size ? parseFloat(data.bid_size) : 0;
+        const targetToken = currentSubMarket.token_id_yes.toLowerCase();
+        let bidsBook = new Map();
+        let asksBook = new Map();
 
-                priceOut1 = ask; 
-                priceOut2 = 100 - bid;
-                
-                document.querySelector('.price-green').innerText = priceOut1 > 0 ? priceOut1 + '¢' : '-';
-                document.querySelector('.price-red').innerText = (priceOut2 > 0 && priceOut2 < 100) ? priceOut2 + '¢' : '-';
-                
-                // 🎯 Выводим объем в долларах
-                const dUsd1 = (depthOut1 * (priceOut1/100)).toFixed(2);
-                const dUsd2 = (depthOut2 * (priceOut2/100)).toFixed(2);
-                document.getElementById('depth-1').innerText = depthOut1 > 0 ? `Доступно: $${dUsd1}` : 'Доступно: ?';
-                document.getElementById('depth-2').innerText = depthOut2 > 0 ? `Доступно: $${dUsd2}` : 'Доступно: ?';
+        // Главная функция отрисовки цен (Точно как на сайте Polymarket!)
+        function renderBook() {
+            let bestBid = 0, bestAsk = 1, bestBidSize = 0, bestAskSize = 0;
+            for (let [p, s] of bidsBook.entries()) { if (p > bestBid) { bestBid = p; bestBidSize = s; } }
+            for (let [p, s] of asksBook.entries()) { if (p < bestAsk) { bestAsk = p; bestAskSize = s; } }
 
-                const spreadEl = document.getElementById('spread-value');
-                if (ask === 0 && bid === 0) {
-                    spreadEl.innerHTML = `<span style="color:#8b949e;">Рынок пуст (Нет ликвидности)</span>`;
-                } else {
-                    const spread = ask - bid;
-                    if (spread <= 2 && spread >= 0) {
-                        spreadEl.innerHTML = `<span class="spread-safe">${spread}¢ (Спред безопасен)</span>`;
-                    } else {
-                        spreadEl.innerHTML = `<span style="color:#da3633; font-weight:bold;">${spread}¢ (Риск проскальзывания)</span>`;
-                    }
-                }
-                
-                if (activeRisk > 0) recalculate();
-                renderPositions(); // 🎯 Обновляем PnL на лету
-            }
+            if (bestBid > 0 && bestAsk > 0 && bestBid >= bestAsk) return;
+
+            priceOut1 = Math.round(bestAsk * 100); depthOut1 = bestAskSize;
+            priceOut2 = 100 - Math.round(bestBid * 100); depthOut2 = bestBidSize; 
+
+            document.querySelector('.price-green').innerText = priceOut1 > 0 ? priceOut1 + '¢' : '-';
+            document.querySelector('.price-red').innerText = (priceOut2 > 0 && priceOut2 < 100) ? priceOut2 + '¢' : '-';
+            
+            document.getElementById('depth-1').innerText = depthOut1 > 0 ? `Доступно: $${(depthOut1 * (priceOut1/100)).toFixed(2)}` : 'Доступно: 0';
+            document.getElementById('depth-2').innerText = depthOut2 > 0 ? `Доступно: $${(depthOut2 * (priceOut2/100)).toFixed(2)}` : 'Доступно: 0';
+
+            const spreadEl = document.getElementById('spread-value');
+            const spread = Math.round(bestAsk * 100) - Math.round(bestBid * 100);
+            
+            if (priceOut1 === 0 && priceOut2 === 0) spreadEl.innerHTML = `<span style="color:#8b949e;">Рынок пуст</span>`;
+            else if (spread <= 2 && spread >= 0) spreadEl.innerHTML = `<span class="spread-safe">${spread}¢ (Спред безопасен)</span>`;
+            else spreadEl.innerHTML = `<span style="color:#da3633; font-weight:bold;">${spread}¢ (Риск проскальзывания)</span>`;
+            
+            if (activeRisk > 0) recalculate();
+            updateLivePnL(); 
+        }
+
+        // 1. Мгновенная отрисовка при клике
+        const fetchOrderbook = () => {
+            fetch(`https://clob.polymarket.com/book?token_id=${targetToken}`)
+                .then(r=>r.json())
+                .then(data => {
+                    bidsBook.clear(); asksBook.clear();
+                    (data.bids||[]).forEach(b => bidsBook.set(parseFloat(b.price), parseFloat(b.size)));
+                    (data.asks||[]).forEach(a => asksBook.set(parseFloat(a.price), parseFloat(a.size)));
+                    renderBook();
+                }).catch(e=>{});
         };
+        fetchOrderbook();
+
+        // 2. БЕТОННЫЙ ЦИКЛ. Гарантирует обновление цены каждые 1.5 сек, даже если вебсокет умрет!
+        syncInterval = setInterval(fetchOrderbook, 1500);
+
+        // 3. Быстрый WebSocket для сверх-динамики
+        function initDirectWebSocket() {
+            marketWs = new WebSocket(`wss://ws-subscriptions-clob.polymarket.com/ws/market`);
+            marketWs.onopen = () => marketWs.send(JSON.stringify({ assets_ids: [targetToken], type: "market" }));
+            
+            marketWs.onmessage = function(event) {
+                if (event.data === "PONG") return;
+                const d = JSON.parse(event.data);
+                const events = Array.isArray(d) ? d : [d];
+                let changed = false;
+
+                events.forEach(ev => {
+                    if (ev.asset_id && ev.asset_id.toLowerCase() !== targetToken) return;
+
+                    if (ev.event_type === "book") {
+                        bidsBook.clear(); asksBook.clear();
+                        (ev.bids||[]).forEach(b => bidsBook.set(parseFloat(b.price), parseFloat(b.size)));
+                        (ev.asks||[]).forEach(a => asksBook.set(parseFloat(a.price), parseFloat(a.size)));
+                        changed = true;
+                    } 
+                    else if (ev.event_type === "price_change") {
+                        const process = (arr, isBid) => {
+                            arr.forEach(i => {
+                                const p = parseFloat(i.price), s = parseFloat(i.size);
+                                const book = isBid ? bidsBook : asksBook;
+                                if (s === 0) book.delete(p); else book.set(p, s);
+                            });
+                        };
+                        if (ev.changes) {
+                            process(ev.changes.filter(c=>c.side==="BUY"), true);
+                            process(ev.changes.filter(c=>c.side==="SELL"), false);
+                        } else {
+                            if (ev.bids) process(ev.bids, true);
+                            if (ev.asks) process(ev.asks, false);
+                        }
+                        changed = true;
+                    }
+                });
+                if (changed) renderBook();
+            };
+
+            marketWs.onclose = function() {
+                if (currentSubMarket && currentSubMarket.condition_id === conditionId) setTimeout(initDirectWebSocket, 1000);
+            };
+            const pingInterval = setInterval(() => {
+                if (marketWs && marketWs.readyState === WebSocket.OPEN) marketWs.send("PING");
+                else clearInterval(pingInterval);
+            }, 10000);
+        }
+        initDirectWebSocket();
     }
 
     function selectTeam(teamId) {
@@ -412,14 +489,14 @@
         document.getElementById('calculator').classList.add('hidden');
         document.querySelectorAll('.strat-btn').forEach(btn => btn.classList.remove('active'));
         document.getElementById('hidden-sure').classList.remove('active');
-        selectTeam(1);
-        priceOut1 = 0; priceOut2 = 0; activeRisk = 0;
+        selectTeam(1); priceOut1 = 0; priceOut2 = 0; activeRisk = 0;
         document.getElementById('custom-price-in').value = '';
         document.getElementById('custom-price-out').value = '';
     }
 
     function closeTerminal() {
-        if (marketWs) { marketWs.close(); marketWs = null; }
+        if (syncInterval) clearInterval(syncInterval);
+        if (marketWs) { marketWs.onclose = null; marketWs.close(); marketWs = null; }
         currentEventObj = null; currentSubMarket = null;
         document.getElementById('screen-terminal').classList.add('hidden');
         document.getElementById('screen-catalog').classList.remove('hidden');
@@ -433,12 +510,8 @@
     function selectStrategy(type, riskPct, btnElement) {
         document.querySelectorAll('.strat-btn').forEach(btn => btn.classList.remove('active'));
         document.getElementById('hidden-sure').classList.remove('active');
-        
-        if (btnElement.tagName === 'SPAN') {
-            btnElement.classList.add('active'); // Активация скрытого верняка
-        } else {
-            btnElement.classList.add('active');
-        }
+        if (btnElement.tagName === 'SPAN') btnElement.classList.add('active'); 
+        else btnElement.classList.add('active');
         
         activeRisk = riskPct; activeStrat = type;
         document.getElementById('calculator').classList.remove('hidden');
@@ -456,14 +529,10 @@
             document.getElementById('calc-shares').innerText = "-";
             document.getElementById('calc-tp').innerText = "-";
             document.getElementById('calc-sl').innerText = "-";
-            submitBtn.disabled = true; 
-            submitBtn.innerText = "РЫНОК НЕДОСТУПЕН"; 
-            submitBtn.style.backgroundColor = "#21262d";
+            submitBtn.disabled = true; submitBtn.innerText = "РЫНОК НЕДОСТУПЕН"; submitBtn.style.backgroundColor = "#21262d";
             return;
         }
         submitBtn.disabled = false;
-        
-        // 🎯 Динамическое название и цвет кнопки
         submitBtn.innerText = `BUY:  ${teamName.toUpperCase()} ЗА ${p}¢`;
         submitBtn.style.backgroundColor = activeTeam === 1 ? '#238636' : '#da3633';
         
@@ -475,9 +544,8 @@
         document.getElementById('calc-size').innerText = "~" + display_amount.toFixed(2) + " USDC";
         document.getElementById('calc-shares').innerText = "~" + expectedShares.toFixed(1) + " шт.";
 
-        // 🎯 Проверка на проскальзывание
         if (currentDepth > 0 && expectedShares > currentDepth) {
-            submitBtn.style.backgroundColor = "#b08800"; // Предупреждающий желтый
+            submitBtn.style.backgroundColor = "#b08800"; 
             submitBtn.innerText = `⚠️ МАЛО ОБЪЕМА! КУПИТЬ ${teamName.toUpperCase()}`;
         }
         
@@ -491,14 +559,10 @@
         }
         
         let slStr = "-";
-        if (activeStrat === '4c' || activeStrat === '8c') {
-            slStr = Math.max(1, Math.round((p_dec - 0.12) * 100)) + "¢ (Фикс -12¢)";
-        } else if (activeStrat === 'match' || activeStrat === 'sure') {
-            slStr = Math.max(1, Math.round((p_dec * 0.5) * 100)) + "¢ (Падение 50%)";
-        }
+        if (activeStrat === '4c' || activeStrat === '8c') slStr = Math.max(1, Math.round((p_dec - 0.12) * 100)) + "¢ (Фикс -12¢)";
+        else if (activeStrat === 'match' || activeStrat === 'sure') slStr = Math.max(1, Math.round((p_dec * 0.5) * 100)) + "¢ (Падение 50%)";
 
-        document.getElementById('calc-tp').innerText = tpStr;
-        document.getElementById('calc-sl').innerText = slStr;
+        document.getElementById('calc-tp').innerText = tpStr; document.getElementById('calc-sl').innerText = slStr;
     }
 
     async function confirmOrder() {
@@ -506,7 +570,6 @@
         const submitBtn = document.getElementById('btn-submit-order');
         const price = activeTeam === 1 ? priceOut1 : priceOut2;
         const bankroll = parseFloat(document.getElementById('bankroll-slider').value);
-        const teamName = activeTeam === 1 ? currentSubMarket.out1 : currentSubMarket.out2;
         const targetToken = activeTeam === 1 ? currentSubMarket.token_id_yes : currentSubMarket.token_id_no;
         if (!targetToken) { alert("Ошибка: У исхода нет токена."); return; }
         
@@ -519,98 +582,49 @@
         
         submitBtn.innerText = "ОТПРАВКА..."; submitBtn.disabled = true;
         try {
-            const requestBody = { 
-                token_id: targetToken, 
-                price: price / 100, 
-                side: "BUY",
-                bankroll: bankroll,
-                risk_percent: activeRisk
-            };
-            
-            if (tp_payload !== null) {
-                requestBody.take_profit_price = tp_payload;
-            }
+            const requestBody = { token_id: targetToken, price: price / 100, side: "BUY", bankroll: bankroll, risk_percent: activeRisk };
+            if (tp_payload !== null) requestBody.take_profit_price = tp_payload;
 
-            const res = await fetch('/api/trade', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(requestBody)
-            });
+            const res = await fetch('/api/trade', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(requestBody) });
             const data = await res.json();
             
             if(data.success) {
-                let invested = Math.max(5.00, bankroll * (activeRisk / 100));
-                let sharesBought = invested / (price / 100);
-                addPosition(data.order_id, activeTeam, teamName, price, sharesBought);
-
-                if(data.tp_order_id || tp_payload) {
-                    alert(`✅ ОРДЕР КУПЛЕН!\nТейк-профит успешно выставлен (см. логи сервера).\nID: ${data.order_id}`);
-                } else {
-                    alert(`✅ ОРДЕР КУПЛЕН!\nАвтоматический ТП отключен для этой стратегии.\nID: ${data.order_id}`);
-                }
-            } else {
-                alert(`❌ Ошибка ордера:\n${data.error}`);
-            }
+                fetchOpenPositions(); 
+                if(data.tp_order_id || tp_payload) alert(`✅ ОРДЕР КУПЛЕН!\nТейк-профит успешно выставлен.\nID: ${data.order_id}`);
+                else alert(`✅ ОРДЕР КУПЛЕН!\nАвтоматический ТП отключен.\nID: ${data.order_id}`);
+            } else alert(`❌ Ошибка ордера:\n${data.error}`);
         } catch (e) { alert("❌ Ошибка соединения."); }
-        
         recalculate(); 
     }
 
     async function confirmCustomOrder() {
         if (!currentSubMarket) return;
-        
         const priceInCents = parseInt(document.getElementById('custom-price-in').value);
         const priceOutCents = parseInt(document.getElementById('custom-price-out').value);
         
-        if (isNaN(priceInCents) || priceInCents < 1 || priceInCents > 99) {
-            alert("Пожалуйста, введите корректную цену Входа (от 1 до 99).");
-            return;
-        }
-        
-        if (activeRisk === 0) {
-            alert("Сначала выберите стратегию (4ц, 8ц, Исход и т.д.), чтобы рассчитать объем.");
-            return;
-        }
+        if (isNaN(priceInCents) || priceInCents < 1 || priceInCents > 99) { alert("Пожалуйста, введите корректную цену Входа (от 1 до 99)."); return; }
+        if (activeRisk === 0) { alert("Сначала выберите стратегию, чтобы рассчитать объем."); return; }
 
         const bankroll = parseFloat(document.getElementById('bankroll-slider').value);
         const targetToken = activeTeam === 1 ? currentSubMarket.token_id_yes : currentSubMarket.token_id_no;
         const btn = document.getElementById('btn-custom-order');
-        
         btn.innerText = "ОТПРАВКА..."; btn.disabled = true;
         
         try {
-            const requestBody = { 
-                token_id: targetToken, 
-                price: priceInCents / 100,
-                side: "BUY",
-                bankroll: bankroll,
-                risk_percent: activeRisk,
-                is_custom_limit: true 
-            };
-            
-            if (!isNaN(priceOutCents) && priceOutCents > priceInCents && priceOutCents < 100) {
-                requestBody.take_profit_price = priceOutCents / 100;
-            }
+            const requestBody = { token_id: targetToken, price: priceInCents / 100, side: "BUY", bankroll: bankroll, risk_percent: activeRisk, is_custom_limit: true };
+            if (!isNaN(priceOutCents) && priceOutCents > priceInCents && priceOutCents < 100) requestBody.take_profit_price = priceOutCents / 100;
 
-            const res = await fetch('/api/trade', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(requestBody)
-            });
+            const res = await fetch('/api/trade', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(requestBody) });
             const data = await res.json();
             
             if(data.success) {
-                if(requestBody.take_profit_price) {
-                    alert(`✅ ЛИМИТКА ВЫСТАВЛЕНА!\nВход: ${priceInCents}¢. Сервер ждет исполнения, чтобы кинуть тейк на ${priceOutCents}¢.\nID: ${data.order_id}`);
-                } else {
-                    alert(`✅ ЛИМИТКА ВЫСТАВЛЕНА (БЕЗ ТЕЙКА)!\nВход: ${priceInCents}¢.\nID: ${data.order_id}`);
-                }
+                fetchOpenPositions(); 
+                if(requestBody.take_profit_price) alert(`✅ ЛИМИТКА ВЫСТАВЛЕНА!\nВход: ${priceInCents}¢. Сервер ждет исполнения.\nID: ${data.order_id}`);
+                else alert(`✅ ЛИМИТКА ВЫСТАВЛЕНА (БЕЗ ТЕЙКА)!\nВход: ${priceInCents}¢.\nID: ${data.order_id}`);
                 document.getElementById('custom-price-in').value = '';
                 document.getElementById('custom-price-out').value = '';
-            }
-            else alert(`❌ Ошибка:\n${data.error}`);
+            } else alert(`❌ Ошибка:\n${data.error}`);
         } catch (e) { alert("❌ Ошибка соединения."); }
-        
         btn.innerText = "ПОСТАВИТЬ ЛИМИТКУ"; btn.disabled = false;
     }
 
@@ -625,10 +639,8 @@
             if (data.matches && data.matches.length > 0) {
                 allMatches = data.matches;
                 changeSort(currentSort, true); 
-            } else {
-                listDiv.innerHTML = `<div style="color: #f85149;">Матчей по категории "${gameFilter}" сейчас нет.</div>`;
-            }
-        } catch (error) { listDiv.innerHTML = `<div style="color: #f85149;">Ошибка соединения с сервером.</div>`; }
+            } else listDiv.innerHTML = `<div style="color: #f85149;">Матчей по категории "${gameFilter}" сейчас нет.</div>`;
+        } catch (error) { listDiv.innerHTML = `<div style="color: #f85149;">Ошибка загрузки матчей с сервера. Проверьте консоль бэкенда.</div>`; }
     }
 
     function changeSort(val, isInitialLoad = false) {
@@ -639,7 +651,6 @@
 
     function sortAndRender() {
         const now = new Date();
-        
         if (currentSort === 'volume') {
             allMatches.sort((a, b) => {
                 const isLiveA = new Date(a.start_date) <= now;
@@ -654,10 +665,7 @@
                 const isLiveB = new Date(b.start_date) <= now;
                 if (isLiveA && !isLiveB) return -1;
                 if (!isLiveA && isLiveB) return 1;
-                
-                const dateA = new Date(a.start_date || '2099').getTime();
-                const dateB = new Date(b.start_date || '2099').getTime();
-                return dateA - dateB; 
+                return new Date(a.start_date || '2099').getTime() - new Date(b.start_date || '2099').getTime();
             });
         }
         renderMatches(allMatches);
@@ -679,21 +687,13 @@
 
         const totalPages = Math.ceil(matchesArray.length / itemsPerPage);
         const startIndex = (currentPage - 1) * itemsPerPage;
-        const endIndex = startIndex + itemsPerPage;
-        const currentSlice = matchesArray.slice(startIndex, endIndex);
+        const currentSlice = matchesArray.slice(startIndex, startIndex + itemsPerPage);
 
         currentSlice.forEach(eventItem => {
             let statusHtml = '';
-            
             const timeStr = formatEventTime(eventItem.start_date);
-            if (timeStr === 'LIVE') {
-                statusHtml = '<span class="live-badge">LIVE</span>';
-            } else {
-                statusHtml = `<span class="time-badge">${timeStr}</span>`;
-            }
-
-            const totalVolFormatted = formatVolume(eventItem.total_volume);
-            const marketsCount = eventItem.sub_markets.length;
+            if (timeStr === 'LIVE') statusHtml = '<span class="live-badge">LIVE</span>';
+            else statusHtml = `<span class="time-badge">${timeStr}</span>`;
 
             listDiv.innerHTML += `
                 <div class="card">
@@ -703,7 +703,7 @@
                         </div>
                         <span style="font-weight: bold; font-size: 20px; color: #c9d1d9;">${eventItem.title}</span>
                         <div style="color: #8b949e; font-size: 14px; margin-top: 8px;">
-                            Объем торгов: <span style="color: #58a6ff; font-weight:bold;">${totalVolFormatted}</span> &nbsp;|&nbsp; Доступно линий: <span style="color: #c9d1d9;">${marketsCount}</span>
+                            Объем: <span style="color: #58a6ff; font-weight:bold;">${formatVolume(eventItem.total_volume)}</span> &nbsp;|&nbsp; Доступно линий: <span style="color: #c9d1d9;">${eventItem.sub_markets.length}</span>
                         </div>
                     </div>
                     <div>
@@ -730,7 +730,11 @@
         });
     });
 
-    window.onload = () => loadMarkets('Dota 2');
+    window.onload = () => {
+        loadMarkets('Dota 2');
+        fetchOpenPositions(); 
+        setInterval(fetchOpenPositions, 3000); 
+    };
 </script>
 </body>
 </html>

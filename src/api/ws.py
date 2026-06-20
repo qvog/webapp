@@ -15,7 +15,6 @@ POLYMARKET_WS_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 async def websocket_endpoint(websocket: WebSocket, token_id: str):
     await websocket.accept()
     
-    # 🎯 ИСПРАВЛЕНИЕ 1: Сразу приводим токен от фронтенда к нижнему регистру
     clean_token = token_id.strip().strip('"').strip("'").lower()
     print(f"\n🔌 [БЭКЕНД] Открываем WS канал с Polymarket для: {clean_token[:12]}...")
     
@@ -53,15 +52,14 @@ async def websocket_endpoint(websocket: WebSocket, token_id: str):
                         updated = False
                         
                         for event in events:
-                            # 🎯 ИСПРАВЛЕНИЕ 2: Приводим токен биржи к нижнему регистру для безопасного сравнения
-                            event_asset_id = event.get("asset_id", "").lower()
-                            if event_asset_id and event_asset_id != clean_token:
-                                continue
-                                
                             event_type = event.get("event_type")
                             
                             # 1. Полный снимок стакана
                             if event_type == "book":
+                                event_asset_id = event.get("asset_id", "").lower()
+                                if event_asset_id and event_asset_id != clean_token:
+                                    continue
+                                    
                                 bids_book.clear()
                                 asks_book.clear()
                                 for b in event.get("bids", []):
@@ -70,32 +68,48 @@ async def websocket_endpoint(websocket: WebSocket, token_id: str):
                                     asks_book[float(a["price"])] = float(a["size"])
                                 updated = True
                                     
-                            # 2. Дельты (изменения)
+                            # 2. Дельты (Супер-быстрые скачки цен)
                             elif event_type == "price_change":
                                 
-                                # 🎯 ИСПРАВЛЕНИЕ 3: Поддержка обоих форматов API Полимаркета
-                                b_changes = event.get("bids", [])
-                                a_changes = event.get("asks", [])
-                                
+                                # Сценарий А: Полимаркет шлет массив changes
                                 if "changes" in event:
                                     for ch in event["changes"]:
-                                        if ch.get("side", "").upper() == "BUY": b_changes.append(ch)
-                                        else: a_changes.append(ch)
+                                        # 🎯 ИСПРАВЛЕНИЕ 1: Жесткая фильтрация токена внутри каждого отдельного тика!
+                                        ch_asset_id = ch.get("asset_id", "").lower()
+                                        if ch_asset_id and ch_asset_id != clean_token:
+                                            continue
+                                            
+                                        try:
+                                            p, s = float(ch["price"]), float(ch["size"])
+                                            side = ch.get("side", "").upper()
+                                            if side == "BUY":
+                                                if s == 0: bids_book.pop(p, None)
+                                                else: bids_book[p] = s
+                                            elif side == "SELL":
+                                                if s == 0: asks_book.pop(p, None)
+                                                else: asks_book[p] = s
+                                        except: pass
+                                        
+                                # Сценарий Б: Полимаркет шлет bids/asks напрямую
+                                else:
+                                    event_asset_id = event.get("asset_id", "").lower()
+                                    if event_asset_id and event_asset_id != clean_token:
+                                        continue
+                                        
+                                    for b in event.get("bids", []):
+                                        try:
+                                            p, s = float(b["price"]), float(b["size"])
+                                            if s == 0: bids_book.pop(p, None)
+                                            else: bids_book[p] = s
+                                        except: pass
 
-                                for b in b_changes:
-                                    try:
-                                        p, s = float(b["price"]), float(b["size"])
-                                        if s == 0: bids_book.pop(p, None)
-                                        else: bids_book[p] = s
-                                    except: pass
-
-                                for a in a_changes:
-                                    try:
-                                        p, s = float(a["price"]), float(a["size"])
-                                        if s == 0: asks_book.pop(p, None)
-                                        else: asks_book[p] = s
-                                    except: pass
-                                    
+                                    for a in event.get("asks", []):
+                                        try:
+                                            p, s = float(a["price"]), float(a["size"])
+                                            if s == 0: asks_book.pop(p, None)
+                                            else: asks_book[p] = s
+                                        except: pass
+                                        
                                 updated = True
                                 
                         # 3. Пушим новые цены на фронтенд
@@ -110,9 +124,11 @@ async def websocket_endpoint(websocket: WebSocket, token_id: str):
                                 best_ask = min(asks_book.keys())
                                 best_ask_size = asks_book[best_ask]
                                 
+                            # 🎯 ИСПРАВЛЕНИЕ 2: Убрали raise ValueError! 
+                            # Если стакан временно скрестился (норма для крипты на миллисекунду),
+                            # просто НЕ отправляем этот кривой кадр на фронт. Сокет больше не крашится!
                             if best_bid > 0 and best_ask > 0 and best_bid >= best_ask:
-                                print(f"⚠️ [СЕТЬ] Скрещенный стакан (Bid {best_bid} >= Ask {best_ask}). Запрашиваю новый снимок...")
-                                raise ValueError("Crossed book anomaly")
+                                continue 
                             
                             await websocket.send_json({
                                 "type": "orderbook_update",
@@ -130,7 +146,7 @@ async def websocket_endpoint(websocket: WebSocket, token_id: str):
             return 
             
         except asyncio.TimeoutError:
-            print("⚠️ [СЕТЬ] Polymarket WS завис (тишина 30 сек). Незаметный реконнект...")
+            # Тихий реконнект без спама в логи
             await asyncio.sleep(1)
             
         except Exception as e:
