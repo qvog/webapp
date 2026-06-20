@@ -3,7 +3,7 @@ import asyncio
 import time
 from fastapi import APIRouter, Query
 from curl_cffi.requests import AsyncSession
-from utils import get_game_category
+from src.utils import get_game_category
 
 router = APIRouter()
 
