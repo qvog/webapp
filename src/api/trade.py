@@ -112,12 +112,20 @@ async def panic_sell_position(req: PanicRequest):
         resp = await run_sync(client.create_and_post_order, order_args=sell_args, options=options, order_type=OrderType.GTC)
         
         if resp and resp.get("success"):
+            # Пытаемся узнать цену, по которой скинули
+            try:
+                ob = await run_sync(client.get_order_book, str(token_id))
+                best_bid = max([float(b['price']) for b in ob.get("bids", [])]) if ob.get("bids") else 0.01
+            except:
+                best_bid = 0.01
+
             # Обновляем БД
             db = SessionLocal()
             try:
                 pos = db.query(Position).filter(Position.order_id == req.order_id).first()
                 if pos:
                     pos.status = "PANIC_SELL"
+                    pos.exit_price = best_bid # 🎯 ЗАПИСЬ ЦЕНЫ
                     db.commit()
             finally: db.close()
             return {"success": True, "message": "Сброшено!"}

@@ -76,7 +76,9 @@ async def monitor_and_manage_position(order_id: str, entry_price: float, tp_pric
     print(f"🛡️ [Воркер] Стоп-Лосс АКТИВЕН: Триггер {sl_trigger_price}$")
 
     end_time = time.time() + (14 * 86400)
-    check_tp_counter, sl_confirmations = 0, 0
+    check_tp_counter = 0
+    sl_confirmations = 0
+    empty_book_count = 0 # 🎯 СЧЕТЧИК ЗАКРЫТИЯ РЫНКА
 
     while time.time() < end_time:
         try:
@@ -85,59 +87,86 @@ async def monitor_and_manage_position(order_id: str, entry_price: float, tp_pric
                 try:
                     tp_info = await run_sync(client.get_order, tp_order_id)
                     tp_data = tp_info[0] if isinstance(tp_info, list) and len(tp_info) > 0 else tp_info
-                    if isinstance(tp_data, dict) and tp_data.get('status') in ['MATCHED', 'FILLED']:
-                        print(f"💰 [Воркер] ТЕЙК-ПРОФИТ СРАБОТАЛ!")
-                        db = SessionLocal()
-                        try:
-                            pos = db.query(Position).filter(Position.order_id == order_id).first()
-                            if pos:
-                                pos.status = "CLOSED_TP"
-                                pos.updated_at = datetime.utcnow()
-                                db.commit()
-                        finally: db.close()
-                        return 
+                    
+                    if isinstance(tp_data, dict):
+                        status = tp_data.get('status')
+                        if status in ['MATCHED', 'FILLED']:
+                            print(f"💰 [Воркер] ТЕЙК-ПРОФИТ СРАБОТАЛ!")
+                            db = SessionLocal()
+                            try:
+                                pos = db.query(Position).filter(Position.order_id == order_id).first()
+                                if pos:
+                                    pos.status = "CLOSED_TP"
+                                    # 🎯 ЗАПИСЬ ЦЕНЫ ВЫХОДА
+                                    pos.exit_price = float(tp_data.get('price', pos.tp_price))
+                                    pos.updated_at = datetime.utcnow()
+                                    db.commit()
+                            finally: db.close()
+                            return 
+                            
+                        # 🎯 ЕСЛИ МАТЧ ЗАКОНЧИЛСЯ: Биржа сама отменит наш тейк-профит!
+                        elif status in ['CANCELED', 'EXPIRED']:
+                            print(f"🏁 [Воркер] ТП отменен биржей. Матч завершен!")
+                            db = SessionLocal()
+                            try:
+                                pos = db.query(Position).filter(Position.order_id == order_id).first()
+                                if pos:
+                                    pos.status = "RESOLVED"
+                                    pos.exit_price = 1.0 # Если матч не выбило по стопу, считаем это как расчет
+                                    pos.updated_at = datetime.utcnow()
+                                    db.commit()
+                            finally: db.close()
+                            return
                 except Exception: pass
             check_tp_counter += 1 
 
             # 2. Проверка стакана (Стоп-Лосс)
-            # 2. Проверка стакана (Стоп-Лосс)
             ob = await run_sync(client.get_order_book, token_id)
-            if not isinstance(ob, dict): 
+            
+            # 🎯 ЕСЛИ МАТЧ ЗАКОНЧИЛСЯ (Для стратегий без Тейк-Профита)
+            # Стакан будет абсолютно пустым. Если он пуст 30 секунд - рынок рассчитан!
+            if not isinstance(ob, dict) or (not ob.get("bids") and not ob.get("asks")): 
+                empty_book_count += 1
+                if empty_book_count > 15: # 30 секунд тишины
+                    print(f"🏁 [Воркер] Стакан пуст 30 секунд. Матч завершен!")
+                    db = SessionLocal()
+                    try:
+                        pos = db.query(Position).filter(Position.order_id == order_id).first()
+                        if pos:
+                            pos.status = "RESOLVED"
+                            pos.exit_price = 1.0 
+                            pos.updated_at = datetime.utcnow()
+                            db.commit()
+                    finally: db.close()
+                    return
                 await asyncio.sleep(2)
                 continue
+            else:
+                empty_book_count = 0 # Если стакан жив, сбрасываем счетчик
 
+            # --- ЛОГИКА СТОП-ЛОССА ---
             bids, asks = ob.get("bids", []), ob.get("asks", []) 
             if bids:
                 best_bid = max([float(b['price']) for b in bids])
                 best_ask = min([float(a['price']) for a in asks]) if asks else 1.0
                 spread = best_ask - best_bid 
                 
-                # 🛡️ НОВАЯ ЗАЩИТА ОТ СКВИЗОВ ЛИКВИДНОСТИ
-                # Нормальный спред 1-5 центов. Если спред шире 8 центов - маркет-мейкеры ушли.
-                # Это иллюзия падения. Мы обязаны переждать этот момент!
                 if spread > 0.08:
                     sl_confirmations = 0
-                    print(f"🛡️ [Воркер] Аномалия стакана (Спред: {round(spread, 2)}$). Игнорирую сквиз!")
                     await asyncio.sleep(2)
                     continue 
                 
                 if 0 < best_bid <= sl_trigger_price:
                     sl_confirmations += 1
-                    print(f"⚠️ [Воркер] Угроза стоп-лосса! ({best_bid}$ <= {sl_trigger_price}$). Тик: {sl_confirmations}/4")
-                    
-                    if sl_confirmations < 4: # Увеличили время ожидания до 6 секунд
+                    if sl_confirmations < 4:
                         await asyncio.sleep(1.5)
                         continue
                         
                     print(f"🚨 [Воркер] СТОП-ЛОСС ПРОБИТ! Цена: {best_bid}$")
                     
-                    # ... дальше идет ваш код отмены ордеров и продажи по рынку ...
-                    
                     if tp_order_id:
                         try: await run_sync(client.cancel_orders, [tp_order_id])
-                        except: 
-                            try: await run_sync(client.cancel_market_orders, asset_id=str(token_id))
-                            except: await run_sync(client.cancel_all)
+                        except: pass
                         await asyncio.sleep(1.5)
                     
                     shares_to_sell = round(actual_size * sell_ratio, 2)
@@ -151,6 +180,8 @@ async def monitor_and_manage_position(order_id: str, entry_price: float, tp_pric
                             pos = db.query(Position).filter(Position.order_id == order_id).first()
                             if pos:
                                 pos.status = "CLOSED_SL"
+                                # 🎯 ЗАПИСЬ ЦЕНЫ ВЫХОДА ПО СТОПУ
+                                pos.exit_price = best_bid
                                 pos.updated_at = datetime.utcnow()
                                 db.commit()
                         finally: db.close()

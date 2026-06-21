@@ -13,6 +13,7 @@ class Position(Base):
     strategy = Column(String, nullable=False) # '4c', '8c', 'match'
     
     entry_price = Column(Float, nullable=False)
+    exit_price = Column(Float, nullable=True)
     size = Column(Float, nullable=False)
     
     # Триггеры для воркера
