@@ -366,7 +366,6 @@
         document.getElementById('out2-name').innerText = currentSubMarket.out2;
         
         // Очищаем старые соединения
-        if (syncInterval) clearInterval(syncInterval);
         if (marketWs) { marketWs.onclose = null; marketWs.close(); }
         
         const targetToken = currentSubMarket.token_id_yes.toLowerCase();
@@ -413,9 +412,6 @@
                 }).catch(e=>{});
         };
         fetchOrderbook();
-
-        // 2. БЕТОННЫЙ ЦИКЛ. Гарантирует обновление цены каждые 1.5 сек, даже если вебсокет умрет!
-        syncInterval = setInterval(fetchOrderbook, 1500);
 
         // 3. Быстрый WebSocket для сверх-динамики
         function initDirectWebSocket() {
@@ -495,7 +491,6 @@
     }
 
     function closeTerminal() {
-        if (syncInterval) clearInterval(syncInterval);
         if (marketWs) { marketWs.onclose = null; marketWs.close(); marketWs = null; }
         currentEventObj = null; currentSubMarket = null;
         document.getElementById('screen-terminal').classList.add('hidden');

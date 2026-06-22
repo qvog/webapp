@@ -92,17 +92,55 @@ async def place_order(req: TradeRequest, background_tasks: BackgroundTasks):
 async def panic_sell_position(req: PanicRequest):
     try:
         client = get_clob_client()
-        order_info = await run_sync(client.get_order, req.order_id)
-        order_data = order_info[0] if isinstance(order_info, list) and len(order_info) > 0 else order_info
         
+        # 1. Пытаемся получить инфу об ордере с биржи
+        try:
+            order_info = await run_sync(client.get_order, req.order_id)
+        except Exception:
+            order_info = None
+
+        # Безопасное извлечение данных
+        if not order_info:
+            order_data = None
+        else:
+            order_data = order_info[0] if isinstance(order_info, list) and len(order_info) > 0 else order_info
+
+        # 🎯 ЗАЩИТА 1: Если Полимаркет забыл про ордер (Матч давно завершен)
+        if not order_data or not isinstance(order_data, dict):
+            print(f"⚠️ Ордер {req.order_id} не найден на бирже. Принудительно закрываем в БД.")
+            db = SessionLocal()
+            try:
+                pos = db.query(Position).filter(Position.order_id == req.order_id).first()
+                if pos:
+                    pos.status = "RESOLVED"
+                    pos.exit_price = 1.0 # Условно записываем как рассчитанный
+                    db.commit()
+            finally: db.close()
+            return {"success": True, "message": "Очищено (матч уже был завершен)."}
+
+        # 2. Если ордер существует, достаем данные
         token_id = order_data.get('asset_id') or order_data.get('token_id')
         size_to_sell = float(order_data.get('size_matched', 0))
         
+        # 🎯 ЗАЩИТА 2: Если мы еще ничего не успели купить (Просто висит лимитка)
         if size_to_sell == 0:
-            return {"success": False, "error": "Ордер еще не исполнен или объем нулевой"}
+            try: await run_sync(client.cancel_orders, [req.order_id])
+            except: pass
+            
+            db = SessionLocal()
+            try:
+                pos = db.query(Position).filter(Position.order_id == req.order_id).first()
+                if pos:
+                    pos.status = "CANCELED"
+                    db.commit()
+            finally: db.close()
+            return {"success": True, "message": "Отменено (покупок не было)."}
 
+        # 3. Стандартная логика экстренной продажи по рынку
         try: await run_sync(client.cancel_market_orders, asset_id=str(token_id))
-        except: await run_sync(client.cancel_all)
+        except: 
+            try: await run_sync(client.cancel_all)
+            except: pass
             
         await asyncio.sleep(1.5) 
         
@@ -112,10 +150,11 @@ async def panic_sell_position(req: PanicRequest):
         resp = await run_sync(client.create_and_post_order, order_args=sell_args, options=options, order_type=OrderType.GTC)
         
         if resp and resp.get("success"):
-            # Пытаемся узнать цену, по которой скинули
+            # Вычисляем цену, по которой скинули
             try:
                 ob = await run_sync(client.get_order_book, str(token_id))
-                best_bid = max([float(b['price']) for b in ob.get("bids", [])]) if ob.get("bids") else 0.01
+                bids = ob.get("bids", [])
+                best_bid = max([float(b['price']) for b in bids]) if bids else 0.01
             except:
                 best_bid = 0.01
 
@@ -125,12 +164,15 @@ async def panic_sell_position(req: PanicRequest):
                 pos = db.query(Position).filter(Position.order_id == req.order_id).first()
                 if pos:
                     pos.status = "PANIC_SELL"
-                    pos.exit_price = best_bid # 🎯 ЗАПИСЬ ЦЕНЫ
+                    pos.exit_price = best_bid
                     db.commit()
             finally: db.close()
-            return {"success": True, "message": "Сброшено!"}
+            return {"success": True, "message": "Сброшено по рынку!"}
         else:
-            return {"success": False, "error": str(resp)}
+            # 🎯 ЗАЩИТА 3: Если биржа выдает ошибку (например, торги приостановлены)
+            error_msg = str(resp)
+            return {"success": False, "error": error_msg}
+            
     except Exception as e:
         return {"success": False, "error": str(e)}
 
