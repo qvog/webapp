@@ -455,6 +455,7 @@
             };
 
             marketWs.onclose = function() {
+                clearInterval(pingInterval); // 🎯 ВОТ ЭТА СТРОЧКА СПАСАЕТ ОТ УТЕЧКИ ОЗУ
                 if (currentSubMarket && currentSubMarket.condition_id === conditionId) setTimeout(initDirectWebSocket, 1000);
             };
             const pingInterval = setInterval(() => {

@@ -7,18 +7,28 @@ from src.utils import get_game_category
 
 router = APIRouter()
 
+# 🎯 Глобальный кэш (Спасет от бана)
+CACHE_TTL = 30 # Кэш живет 30 секунд
+markets_cache = {}
+last_fetch_time = {}
+
 @router.get("/api/markets")
 async def get_markets(game: str = Query("Dota 2")):
     try:
+        current_time = time.time()
+        # Если данные свежие - отдаем моментально из ОЗУ сервера
+        if game in markets_cache and (current_time - last_fetch_time.get(game, 0)) < CACHE_TTL:
+            print(f"⚡ [КЭШ] Отдаю матчи {game} из памяти (0 мс)")
+            return {"matches": markets_cache[game]}
+
         url = "https://gamma-api.polymarket.com/events"
         
-        # Берем более широкие теги на случай, если Полимаркет изменил структуру
         if game == "Dota 2": target_tags = ["dota-2", "esports"]; offsets = [0, 100]
         elif game == "CS2": target_tags = ["csgo", "counter-strike", "esports"]; offsets = [0, 100]
         elif game == "LoL": target_tags = ["league-of-legends", "esports"]; offsets = [0, 100]
         else: target_tags = ["esports", "dota-2", "csgo", "league-of-legends"]; offsets = [0, 100] 
         
-        print(f"\n⏳ [РАДАР] Запрос дисциплины: {game}. Начинаем сканирование...")
+        print(f"\n⏳ [РАДАР] Запрос дисциплины: {game}. Качаем свежие данные...")
         events_dict = {}
         
         async with AsyncSession(impersonate="chrome110") as session:
@@ -33,21 +43,10 @@ async def get_markets(game: str = Query("Dota 2")):
             responses = await asyncio.gather(*tasks, return_exceptions=True)
             
             for i, resp in enumerate(responses):
-                # 1. Проверяем, не отвалился ли интернет/прокси
-                if isinstance(resp, Exception):
-                    print(f"❌ [СЕТЬ] Ошибка запроса {i}: {resp}")
-                    continue
-                
-                # 2. Печатаем ответ сервера
-                print(f"📡 [СЕРВЕР] Тег запроса {i} | Статус: {resp.status_code} | Длина ответа: {len(resp.content)} байт")
-                
-                if resp.status_code != 200:
-                    print(f"⚠️ [БЛОКИРОВКА] Сервер не пустил! Ответ: {resp.text[:150]}")
+                if isinstance(resp, Exception) or resp.status_code != 200:
                     continue
                     
                 data = resp.json()
-                print(f"📦 [СЫРЫЕ ДАННЫЕ] Получено событий до фильтрации: {len(data)}")
-                
                 for event in data:
                     event_id = event.get("id")
                     title = event.get("title", "")
@@ -74,11 +73,8 @@ async def get_markets(game: str = Query("Dota 2")):
                             "start_date": start_date, "status": "UPCOMING", "total_volume": 0.0, "sub_markets": []
                         }
                     
-                    valid_markets_count = 0
-                    
                     for market in markets:
                         if market.get("resolved") is True or market.get("closed") is True: continue
-                            
                         market_id = market.get("id")
                         if any(m["market_id"] == market_id for m in events_dict[event_id]["sub_markets"]): continue
                             
@@ -121,19 +117,12 @@ async def get_markets(game: str = Query("Dota 2")):
                         token_yes = clob_token_ids[0]
                         token_no = clob_token_ids[1] if len(clob_token_ids) > 1 else ""
                         
-                        # 🛡️ Бронебойный парсинг (защита от null/None)
-                        liq_raw = market.get("liquidity")
-                        vol_raw = market.get("volume")
-                        liquidity = float(liq_raw) if liq_raw is not None else 0.0
-                        volume = float(vol_raw) if vol_raw is not None else 0.0
+                        liquidity = float(market.get("liquidity") or 0.0)
+                        volume = float(market.get("volume") or 0.0)
                         
-                        # 🎯 Отсекаем мертвые рынки (где пусто и в истории, и в стакане)
-                        if volume == 0.0:
-                            continue
+                        if volume == 0.0: continue
                         
                         events_dict[event_id]["total_volume"] += volume
-                        valid_markets_count += 1
-                        
                         events_dict[event_id]["sub_markets"].append({
                             "market_id": market_id, "condition_id": token_yes, 
                             "token_id_yes": token_yes, "token_id_no": token_no,
@@ -141,15 +130,14 @@ async def get_markets(game: str = Query("Dota 2")):
                             "volume": volume, "price": current_price,
                             "out1": out1, "out2": out2
                         })
-                    
-                    if valid_markets_count == 0:
-                        print(f"⚠️ [СКИП] {title[:40]}... -> Нет валидных рынков")
-                    else:
-                        print(f"✅ [ДОБАВЛЕН] {title[:40]}... -> Открыто рынков: {valid_markets_count}")
 
         final_events = [e for e in events_dict.values() if len(e["sub_markets"]) > 0]
-        print(f"📊 Итог сканирования: Найдено {len(final_events)} активных матчей для {game}.\n")
         
+        # 🎯 СОХРАНЯЕМ В КЭШ
+        markets_cache[game] = final_events
+        last_fetch_time[game] = current_time
+        
+        print(f"📊 Итог сканирования: Найдено {len(final_events)} активных матчей для {game}.\n")
         return {"matches": final_events}
     except Exception as e:
         print(f"❌ Критическая ошибка парсинга: {e}")

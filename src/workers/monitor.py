@@ -107,36 +107,47 @@ async def monitor_and_manage_position(order_id: str, entry_price: float, tp_pric
 
                 try:
                     while True:
-                        # 1. Редкая проверка Тейк-Профита (раз в 15 секунд)
-                        if tp_order_id and (time.time() - last_tp_check > 15):
+                        # 1. Редкая проверка ТП и СИНХРОНИЗАЦИЯ СТАКАНА (раз в 15 секунд)
+                        if time.time() - last_tp_check > 15:
                             last_tp_check = time.time()
+                            # А) Проверка тейк-профита
+                            if tp_order_id:
+                                try:
+                                    tp_info = await run_sync(client.get_order, tp_order_id)
+                                    tp_data = tp_info[0] if isinstance(tp_info, list) and len(tp_info) > 0 else tp_info
+                                    if isinstance(tp_data, dict):
+                                        status = tp_data.get('status')
+                                        if status in ['MATCHED', 'FILLED']:
+                                            print(f"💰 [Воркер] ТЕЙК-ПРОФИТ СРАБОТАЛ!")
+                                            db = SessionLocal()
+                                            try:
+                                                pos = db.query(Position).filter(Position.order_id == order_id).first()
+                                                if pos:
+                                                    pos.status = "CLOSED_TP"
+                                                    pos.exit_price = float(tp_data.get('price', pos.tp_price))
+                                                    db.commit()
+                                            finally: db.close()
+                                            return 
+                                        elif status in ['CANCELED', 'EXPIRED']:
+                                            print(f"🏁 [Воркер] ТП отменен биржей. Матч завершен!")
+                                            db = SessionLocal()
+                                            try:
+                                                pos = db.query(Position).filter(Position.order_id == order_id).first()
+                                                if pos: pos.status = "RESOLVED"; pos.exit_price = 1.0; db.commit()
+                                            finally: db.close()
+                                            return
+                                except: pass
+                            
+                            # Б) 🎯 ПРИНУДИТЕЛЬНАЯ СИНХРОНИЗАЦИЯ (Защита от слепых зон implied odds)
                             try:
-                                tp_info = await run_sync(client.get_order, tp_order_id)
-                                tp_data = tp_info[0] if isinstance(tp_info, list) and len(tp_info) > 0 else tp_info
-                                if isinstance(tp_data, dict):
-                                    status = tp_data.get('status')
-                                    if status in ['MATCHED', 'FILLED']:
-                                        print(f"💰 [Воркер] ТЕЙК-ПРОФИТ СРАБОТАЛ!")
-                                        db = SessionLocal()
-                                        try:
-                                            pos = db.query(Position).filter(Position.order_id == order_id).first()
-                                            if pos:
-                                                pos.status = "CLOSED_TP"
-                                                pos.exit_price = float(tp_data.get('price', pos.tp_price))
-                                                db.commit()
-                                        finally: db.close()
-                                        return 
-                                    elif status in ['CANCELED', 'EXPIRED']:
-                                        print(f"🏁 [Воркер] ТП отменен биржей. Матч завершен!")
-                                        db = SessionLocal()
-                                        try:
-                                            pos = db.query(Position).filter(Position.order_id == order_id).first()
-                                            if pos: pos.status = "RESOLVED"; pos.exit_price = 1.0; db.commit()
-                                        finally: db.close()
-                                        return
+                                ob = await run_sync(client.get_order_book, token_id)
+                                if isinstance(ob, dict) and (ob.get("bids") or ob.get("asks")):
+                                    bids_book.clear()
+                                    asks_book.clear()
+                                    for b in ob.get("bids", []): bids_book[float(b['price'])] = float(b['size'])
+                                    for a in ob.get("asks", []): asks_book[float(a['price'])] = float(a['size'])
                             except: pass
-
-                        # 2. Ловим цены из WebSocket
+                            
                         msg = await asyncio.wait_for(ws.recv(), timeout=30.0)
                         if msg == "PONG": continue
                         
