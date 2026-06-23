@@ -10,6 +10,7 @@ class Position(Base):
     # ID ордера на Полимаркете, по которому мы вошли
     order_id = Column(String, index=True, nullable=False, unique=True)
     token_id = Column(String, index=True, nullable=False)
+    condition_id = Column(String, nullable=True)
     strategy = Column(String, nullable=False) # '4c', '8c', 'match'
     
     entry_price = Column(Float, nullable=False)
