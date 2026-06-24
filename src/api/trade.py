@@ -20,6 +20,8 @@ class TradeRequest(BaseModel):
     bankroll: float
     risk_percent: float
     take_profit_price: Optional[float] = None
+    stop_loss_price: Optional[float] = None  # 🎯 НОВОЕ: Принимаем Стоп-Лосс
+    strategy: str = "custom"                 # 🎯 НОВОЕ: Принимаем Стратегию
     is_custom_limit: bool = False
     condition_id: Optional[str] = None
 
@@ -31,11 +33,8 @@ async def place_order(req: TradeRequest, background_tasks: BackgroundTasks):
     safe_price = round(float(req.price), 2)
     side_const = BUY if req.side.upper() == "BUY" else SELL
     
-    strategy = "match"
-    if req.risk_percent == 2.5: strategy = "4c"
-    elif req.risk_percent == 1.5: strategy = "8c"
-    elif req.risk_percent == 5.0: strategy = "match"
-    elif req.risk_percent == 20.0: strategy = "sure"
+    # 🎯 БЕРЕМ СТРАТЕГИЮ НАПРЯМУЮ ОТ ФРОНТЕНДА (Удалили старые if/elif)
+    strategy = req.strategy 
     
     if req.bankroll < 5.00:
         return {"success": False, "error": f"Банкролл ({req.bankroll}$) меньше $5."}
@@ -56,10 +55,12 @@ async def place_order(req: TradeRequest, background_tasks: BackgroundTasks):
             main_order_id = resp.get('orderID')
             safe_tp_price = round(float(req.take_profit_price), 2) if req.take_profit_price else None
             
-            # Запись в БД
-            sl_price = 0
-            if strategy in ['4c', '8c']: sl_price = safe_price - 0.12
-            elif strategy in ['match', 'sure']: sl_price = safe_price * 0.5
+            # 🎯 БЕРЕМ СТОП-ЛОСС НАПРЯМУЮ ОТ ФРОНТЕНДА
+            if req.stop_loss_price is not None:
+                sl_price = round(float(req.stop_loss_price), 2)
+            else:
+                sl_price = safe_price - 0.12 # Экстренный фолбэк
+            
             sl_price = max(0.01, round(sl_price, 2))
 
             db = SessionLocal()
