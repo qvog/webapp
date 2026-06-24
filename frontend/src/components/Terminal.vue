@@ -6,7 +6,7 @@
         <button v-if="currentEvent" @click="closeTerminal" :class="['px-3 py-1 rounded text-xs font-bold border transition-colors', isDark ? 'border-[#00e5ff] text-[#00e5ff] hover:bg-[#00e5ff] hover:text-black' : 'border-[#00e5ff] text-[#00b8cc] hover:bg-[#00e5ff] hover:text-white']">
           ← НАЗАД
         </button>
-        <h1 class="text-lg font-bold">{{ currentEvent ? currentEvent.title : 'HFT TERMINAL' }}</h1>
+        <h1 class="text-lg font-bold">{{ currentEvent ? currentEvent.title : '@INMY2 TERMINAL' }}</h1>
       </div>
       
       <button @click="isDark = !isDark" :class="['px-4 py-1.5 rounded-full text-xs font-bold border transition-colors flex gap-2 items-center', isDark ? 'border-[#00e5ff] text-[#00e5ff] hover:bg-[#00e5ff]/10' : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50 shadow-sm']">
@@ -136,10 +136,14 @@
 
 <script setup>
 import { ref, onMounted, onUnmounted, nextTick } from 'vue'
+import { useToast } from 'vue-toastification'
 import OrderBook from './Terminal/OrderBook.vue'
+import { tradeApi } from '../api/tradeService' // 🎯 Наш новый API-слой
+
+const toast = useToast() // 🎯 Подключаем уведомления
 
 // --- STATE ---
-const isDark = ref(true) // По умолчанию Грок-стиль
+const isDark = ref(true)
 const matches = ref([])
 const currentEvent = ref(null)
 const activeSubMarket = ref(null)
@@ -171,15 +175,16 @@ const handleKeydown = (e) => {
 const formatVolume = (val) => val >= 1000 ? (val / 1000).toFixed(1) + 'K' : Math.round(val)
 
 const loadMarkets = async () => {
-  const res = await fetch('/api/markets?game=Dota 2')
-  const data = await res.json()
-  // 🎯 ИСПРАВЛЕНИЕ: Сортировка по объему
-  if (data.matches) matches.value = data.matches.sort((a, b) => b.total_volume - a.total_volume)
+  try {
+    const data = await tradeApi.getMarkets('Dota 2')
+    if (data.matches) matches.value = data.matches.sort((a, b) => b.total_volume - a.total_volume)
+  } catch (e) {
+    toast.error("Ошибка загрузки матчей")
+  }
 }
 
 const loadPositions = async () => {
-  const res = await fetch('/api/positions')
-  const data = await res.json()
+  const data = await tradeApi.getPositions()
   if (data.success) {
     openPositions.value = data.positions.map(pos => {
       let diff = Math.round(pos.entry_price * 100) - Math.round(pos.entry_price * 100)
@@ -229,12 +234,16 @@ const connectToMarket = (sub) => {
     (dataNo.asks||[]).forEach(a => rawAsksNo.value.set(parseFloat(a.price), parseFloat(a.size)));
     isConnecting.value = false
     nextTick(() => orderBookRef.value?.scrollToSpread())
-  }).catch(() => { isConnecting.value = false })
+  }).catch(() => { 
+    isConnecting.value = false
+    toast.error("Не удалось загрузить стакан")
+  })
 
   ws = new WebSocket(`wss://ws-subscriptions-clob.polymarket.com/ws/market`)
   ws.onopen = () => {
     let assets = [tokenYes]; if (tokenNo) assets.push(tokenNo)
     ws.send(JSON.stringify({ assets_ids: assets, type: "market" }))
+    toast.success("HFT Синхронизация установлена", { timeout: 1500 })
   }
   ws.onmessage = (event) => {
     if (event.data === "PONG") return
@@ -271,9 +280,13 @@ const connectToMarket = (sub) => {
     rawBidsNo.value = new Map(rawBidsNo.value); rawAsksNo.value = new Map(rawAsksNo.value)
   }
   let pingInt = setInterval(() => { if (ws?.readyState === WebSocket.OPEN) ws.send("PING"); else clearInterval(pingInt) }, 10000)
-  ws.onclose = () => clearInterval(pingInt)
+  ws.onclose = () => {
+    clearInterval(pingInt)
+    if (activeSubMarket.value?.condition_id === sub.condition_id) toast.warning("Переподключение к бирже...", { timeout: 2000 })
+  }
 }
 
+// 🎯 ОТПРАВКА ОРДЕРА С УВЕДОМЛЕНИЯМИ
 const handlePlaceOrder = async (side, priceCents) => {
   if (side === 'SELL') return
   const targetToken = activeTeam.value === 1 ? activeSubMarket.value.token_id_yes : activeSubMarket.value.token_id_no
@@ -302,16 +315,33 @@ const handlePlaceOrder = async (side, priceCents) => {
   }
   
   try {
-    const res = await fetch('/api/trade', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(reqBody) })
-    if ((await res.json()).success) loadPositions()
-  } catch (e) {}
+    toast.info(`Отправка ордера: ${priceCents}¢...`, { timeout: 1000 })
+    const data = await tradeApi.placeOrder(reqBody)
+    if (data.success) {
+      toast.success(`✅ Успешно! Куплено по ${priceCents}¢`)
+      loadPositions()
+    } else {
+      toast.error(`❌ Отказ биржи: ${data.error}`)
+    }
+  } catch (e) {
+    toast.error("❌ Ошибка сети: Сервер не отвечает")
+  }
 }
 
+// 🎯 СБРОС С УВЕДОМЛЕНИЯМИ
 const panicSell = async (orderId) => {
   try {
-    const res = await fetch('/api/panic_sell', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ order_id: orderId }) })
-    if ((await res.json()).success) loadPositions()
-  } catch(e) {}
+    toast.warning("⚡ Инициация сброса по рынку...", { timeout: 1500 })
+    const data = await tradeApi.panicSell(orderId)
+    if (data.success) {
+      toast.success(`✅ ${data.message}`)
+      loadPositions()
+    } else {
+      toast.error(`❌ Ошибка сброса: ${data.error}`)
+    }
+  } catch(e) {
+    toast.error("❌ Ошибка сети при сбросе")
+  }
 }
 
 onMounted(() => { 

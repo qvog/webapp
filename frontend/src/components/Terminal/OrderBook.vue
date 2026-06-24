@@ -28,8 +28,8 @@
 
       <button 
         @click="$emit('placeOrder', 'BUY', bestAsk)"
-        class="flex-1 py-2 rounded font-bold text-sm border shadow-[0_0_15px_rgba(0,229,255,0.15)] transition-all flex flex-col items-center justify-center"
-        :class="isDark ? 'bg-[#00e5ff]/10 border-[#00e5ff] text-[#00e5ff] hover:bg-[#00e5ff]/20' : 'bg-[#00e5ff]/10 border-[#00e5ff] text-[#00b8cc] hover:bg-[#00e5ff]/20'"
+        class="flex-1 py-2 rounded font-bold text-sm border shadow-[0_0_15px_rgba(34,197,94,0.15)] transition-all flex flex-col items-center justify-center"
+        :class="isDark ? 'bg-green-500/10 border-green-500 text-green-400 hover:bg-green-500/20 hover:shadow-[0_0_20px_rgba(34,197,94,0.3)]' : 'bg-green-50 border-green-400 text-green-600 hover:bg-green-100'"
       >
         <span class="text-[10px] tracking-wider uppercase">BUY (Best Ask)</span>
         <span class="text-lg">{{ bestAsk > 0 ? bestAsk + '¢' : '--' }}</span>

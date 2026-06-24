@@ -8,7 +8,7 @@ def main():
 
     # Определяем абсолютные пути
     base_dir = os.path.dirname(os.path.abspath(__file__))
-    frontend_dir = os.path.join(base_dir, "frontend-vue")
+    frontend_dir = os.path.join(base_dir, "frontend")
 
     # Команда для npm (учитываем разницу между Windows и Linux/WSL)
     npm_cmd = "npm.cmd" if os.name == "nt" else "npm"
