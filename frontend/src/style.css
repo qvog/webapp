@@ -3,14 +3,14 @@
 .Vue-Toastification__container.top-right {
   position: fixed;
   top: 12px;
-  right: 240px;              /* фиксированный отступ от правого края экрана */
-  width: 400px;              /* ЖЁСТКАЯ ширина – контейнер никогда не меняет размеры */
-  max-width: none;           /* убираем любые ограничения */
+  right: 240px;       
+  width: 400px;              
+  max-width: none;
   display: flex;
   flex-direction: column;
-  align-items: flex-end;     /* тосты прижаты к правому краю контейнера */
+  align-items: flex-end;     
   padding: 0 !important;
-  pointer-events: none;      /* не перехватывает клики сквозь пустоту */
+  pointer-events: none;      
   z-index: 9999;
 }
 

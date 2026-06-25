@@ -37,9 +37,9 @@
     </div>
 
     <div :class="['grid grid-cols-3 text-[10px] font-bold text-gray-500 py-1 sticky top-0 z-20 shrink-0 border-b', isDark ? 'bg-black border-zinc-800' : 'bg-gray-100 border-gray-300']">
-      <div class="text-center">BIDS (ПОКУПКА)</div>
-      <div class="text-center">ЦЕНА ¢</div>
-      <div class="text-center">ASKS (ПРОДАЖА)</div>
+      <div class="text-center">BIDS (BUY)</div>
+      <div class="text-center">PRICE ¢</div>
+      <div class="text-center">ASKS (SELL)</div>
     </div>
     
     <div id="ladder-container" class="flex-1 overflow-y-auto scroll-smooth custom-scrollbar relative">

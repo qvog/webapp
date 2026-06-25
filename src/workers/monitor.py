@@ -32,7 +32,18 @@ async def monitor_and_manage_position(order_id: str, entry_price: float, tp_pric
                 actual_size = int(float(size_matched) * 100) / 100.0 if size_matched and float(size_matched) > 0 else original_size
                 is_filled = True
                 print(f"⚙️ [Воркер] Позиция набрана. Куплено: {actual_size} акций.")
-                break
+                
+                # 🎯 НОВОЕ: Говорим базе и интерфейсу, что ордер перешел в рынок!
+                db = SessionLocal()
+                try:
+                    pos = db.query(Position).filter(Position.order_id == order_id).first()
+                    if pos: 
+                        pos.status = "OPEN"
+                        pos.size = actual_size # Заодно сохраняем точный купленный объем (если налили меньше)
+                        db.commit()
+                finally: db.close()
+                
+                break # Выходим из ожидания, идем ставить Тейк-Профит
             elif status in ['CANCELED', 'EXPIRED']:
                 print(f"⚠️ [Воркер] Базовый ордер отменен. Отключаюсь.")
                 db = SessionLocal()

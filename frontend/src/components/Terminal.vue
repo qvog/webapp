@@ -4,9 +4,9 @@
     <header :class="['h-14 shrink-0 px-4 flex justify-between items-center z-10 border-b', marketStore.isDark ? 'bg-[#0a0a0a] border-zinc-800' : 'bg-white border-gray-300']">
       <div class="flex items-center gap-4">
         <button v-if="currentEvent" @click="closeTerminal" :class="['px-3 py-1 rounded text-xs font-bold border transition-colors', marketStore.isDark ? 'border-[#00e5ff] text-[#00e5ff] hover:bg-[#00e5ff] hover:text-black' : 'border-[#00e5ff] text-[#00b8cc] hover:bg-[#00e5ff] hover:text-white']">
-          ← НАЗАД
+          ← BACK
         </button>
-        <h1 class="text-lg font-bold">{{ currentEvent ? currentEvent.title : 'HFT TERMINAL' }}</h1>
+        <h1 class="text-lg font-bold">{{ currentEvent ? currentEvent.title : 'qScalp' }}</h1>
       </div>
       
       <button @click="marketStore.isDark = !marketStore.isDark" :class="['px-4 py-1.5 rounded-full text-xs font-bold border transition-colors flex gap-2 items-center', marketStore.isDark ? 'border-[#00e5ff] text-[#00e5ff] hover:bg-[#00e5ff]/10' : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50 shadow-sm']">
@@ -20,37 +20,37 @@
       <div class="w-64 flex flex-col gap-2 shrink-0">
         <div :class="['border rounded p-3 shrink-0', marketStore.isDark ? 'bg-[#0a0a0a] border-zinc-800' : 'bg-white border-gray-300 shadow-sm']">
           <div class="flex justify-between items-center mb-3">
-            <h3 class="font-bold text-gray-500 text-[10px] tracking-wider">НАСТРОЙКИ</h3>
+            <h3 class="font-bold text-gray-500 text-[10px] tracking-wider">Options</h3>
             <div :class="['flex rounded border p-0.5', marketStore.isDark ? 'bg-black border-zinc-800' : 'bg-gray-100 border-gray-300']">
-              <button @click="marketStore.tradingMode = 'custom'" :class="['px-2 py-1 text-[10px] font-bold rounded transition-colors', marketStore.tradingMode === 'custom' ? (marketStore.isDark ? 'bg-[#00e5ff] text-black' : 'bg-[#00e5ff] text-white') : 'text-gray-500']">РУЧНОЙ</button>
-              <button @click="marketStore.tradingMode = 'presets'" :class="['px-2 py-1 text-[10px] font-bold rounded transition-colors', marketStore.tradingMode === 'presets' ? (marketStore.isDark ? 'bg-[#00e5ff] text-black' : 'bg-[#00e5ff] text-white') : 'text-gray-500']">ПРЕСЕТЫ</button>
+              <button @click="marketStore.tradingMode = 'custom'" :class="['px-2 py-1 text-[10px] font-bold rounded transition-colors', marketStore.tradingMode === 'custom' ? (marketStore.isDark ? 'bg-[#00e5ff] text-black' : 'bg-[#00e5ff] text-white') : 'text-gray-500']">Custom</button>
+              <button @click="marketStore.tradingMode = 'presets'" :class="['px-2 py-1 text-[10px] font-bold rounded transition-colors', marketStore.tradingMode === 'presets' ? (marketStore.isDark ? 'bg-[#00e5ff] text-black' : 'bg-[#00e5ff] text-white') : 'text-gray-500']">Presets</button>
             </div>
           </div>
 
           <div class="mb-3">
-            <label class="block text-[10px] text-gray-500 mb-1">Объем (USDC)</label>
+            <label class="block text-[10px] text-gray-500 mb-1">Value (USDC)</label>
             <input v-model="marketStore.tradeSize" type="number" :class="['w-full border rounded px-2 py-1.5 text-sm font-bold outline-none focus:border-[#00e5ff]', marketStore.isDark ? 'bg-black border-zinc-800 text-white' : 'bg-white border-gray-300 text-black']" />
           </div>
 
           <div v-if="marketStore.tradingMode === 'custom'" class="flex gap-2">
             <div class="flex-1">
-              <label class="block text-[10px] text-gray-500 mb-1">Авто-ТП (Тики)</label>
+              <label class="block text-[10px] text-gray-500 mb-1">Take Profit</label>
               <input v-model="marketStore.tpOffset" type="number" :class="['w-full border rounded px-2 py-1.5 text-sm font-bold outline-none text-green-500', marketStore.isDark ? 'bg-black border-zinc-800' : 'bg-white border-gray-300']" />
             </div>
             <div class="flex-1">
-              <label class="block text-[10px] text-gray-500 mb-1">Стоп (Тики)</label>
+              <label class="block text-[10px] text-gray-500 mb-1">Stop Loss</label>
               <input v-model="marketStore.slOffset" type="number" :class="['w-full border rounded px-2 py-1.5 text-sm font-bold outline-none text-red-500', marketStore.isDark ? 'bg-black border-zinc-800' : 'bg-white border-gray-300']" />
             </div>
           </div>
 
           <div v-if="marketStore.tradingMode === 'presets'" class="grid grid-cols-2 gap-2">
-            <button @click="marketStore.activePreset = '4c'" :class="['p-2 rounded text-xs font-bold border transition-colors', marketStore.activePreset === '4c' ? (marketStore.isDark ? 'bg-[#00e5ff] border-[#00e5ff] text-black' : 'bg-[#00e5ff] border-[#00e5ff] text-white') : (marketStore.isDark ? 'bg-black border-zinc-800 text-gray-500' : 'bg-gray-50 border-gray-300 text-gray-600')]">4 ЦЕНТА</button>
-            <button @click="marketStore.activePreset = '8c'" :class="['p-2 rounded text-xs font-bold border transition-colors', marketStore.activePreset === '8c' ? (marketStore.isDark ? 'bg-[#00e5ff] border-[#00e5ff] text-black' : 'bg-[#00e5ff] border-[#00e5ff] text-white') : (marketStore.isDark ? 'bg-black border-zinc-800 text-gray-500' : 'bg-gray-50 border-gray-300 text-gray-600')]">8 ЦЕНТОВ</button>
+            <button @click="marketStore.activePreset = '4c'" :class="['p-2 rounded text-xs font-bold border transition-colors', marketStore.activePreset === '4c' ? (marketStore.isDark ? 'bg-[#00e5ff] border-[#00e5ff] text-black' : 'bg-[#00e5ff] border-[#00e5ff] text-white') : (marketStore.isDark ? 'bg-black border-zinc-800 text-gray-500' : 'bg-gray-50 border-gray-300 text-gray-600')]">4c</button>
+            <button @click="marketStore.activePreset = '8c'" :class="['p-2 rounded text-xs font-bold border transition-colors', marketStore.activePreset === '8c' ? (marketStore.isDark ? 'bg-[#00e5ff] border-[#00e5ff] text-black' : 'bg-[#00e5ff] border-[#00e5ff] text-white') : (marketStore.isDark ? 'bg-black border-zinc-800 text-gray-500' : 'bg-gray-50 border-gray-300 text-gray-600')]">8c</button>
           </div>
         </div>
 
         <div :class="['border rounded p-3 flex-1 overflow-y-auto custom-scrollbar', marketStore.isDark ? 'bg-[#0a0a0a] border-zinc-800' : 'bg-white border-gray-300 shadow-sm']">
-          <h3 class="font-bold text-gray-500 text-[10px] mb-2 tracking-wider">ЛИНИИ ({{ currentEvent.sub_markets.length }})</h3>
+          <h3 class="font-bold text-gray-500 text-[10px] mb-2 tracking-wider">Lines ({{ currentEvent.sub_markets.length }})</h3>
           <div class="flex flex-col gap-2">
             <button 
               v-for="sub in currentEvent.sub_markets" :key="sub.condition_id"
@@ -67,9 +67,8 @@
 
       <div class="flex-1 relative flex flex-col min-w-[350px]">
         <div v-if="isConnecting" class="absolute inset-0 z-50 flex items-center justify-center backdrop-blur-sm rounded-lg" :class="marketStore.isDark ? 'bg-black/80' : 'bg-white/80'">
-          <span class="text-[#00e5ff] text-sm font-bold animate-pulse">СИНХРОНИЗАЦИЯ...</span>
+          <span class="text-[#00e5ff] text-sm font-bold animate-pulse">CONNECTION...</span>
         </div>
-        <div v-if="!isConnecting" class="absolute top-10 right-4 z-50 text-[10px] text-gray-500 pointer-events-none opacity-50">Нажми [Space] для центровки</div>
 
         <OrderBook 
           ref="orderBookRef"
@@ -89,13 +88,13 @@
       </div>
 
       <div :class="['w-64 border rounded p-3 flex flex-col shrink-0', marketStore.isDark ? 'bg-[#0a0a0a] border-zinc-800' : 'bg-white border-gray-300 shadow-sm']">
-        <div class="flex justify-between items-center mb-2">
-          <h3 class="font-bold text-gray-500 text-[10px] tracking-wider">ОТКРЫТЫЕ СДЕЛКИ</h3>
-          <button @click="marketStore.loadPositions()" class="text-[10px] text-[#00e5ff] hover:underline transition-colors">↻ Обновить</button>
+        <div class="flex justify-between items-center mb-2"> 
+          <h3 class="font-bold text-gray-500 text-[10px] tracking-wider">Open Orders</h3>
+          <button @click="marketStore.loadPositions()" class="text-[10px] text-[#00e5ff] hover:underline transition-colors">↻RESET</button>
         </div>
         
         <div class="flex-1 overflow-y-auto custom-scrollbar space-y-2 pr-1">
-          <div v-if="marketStore.openPositions.length === 0" class="text-center text-gray-500 text-xs mt-10">Нет сделок</div>
+          <div v-if="marketStore.openPositions.length === 0" class="text-center text-gray-500 text-xs mt-10">Empty</div>
           
           <div v-for="pos in marketStore.openPositions" :key="pos.order_id" :class="['border p-2 rounded flex flex-col gap-1.5 transition-colors', marketStore.isDark ? 'bg-black border-zinc-800 hover:border-zinc-700' : 'bg-gray-50 border-gray-200 hover:border-gray-300']">
             
@@ -103,29 +102,35 @@
               <span class="font-bold text-xs truncate max-w-[120px]" :title="marketStore.getTeamNameFromToken(pos.token_id)">
                 {{ marketStore.getTeamNameFromToken(pos.token_id) }}
               </span>
-              <span :class="['font-bold text-xs', pos.currentPnL >= 0 ? 'text-green-500' : 'text-red-500']">
-                {{ pos.currentPnL > 0 ? '+' : '' }}${{ pos.currentPnL.toFixed(2) }}
-              </span>
+              
+              <div class="flex items-center">
+                <span v-if="pos.status === 'PENDING'" class="text-[9px] px-1.5 py-0.5 rounded font-bold bg-yellow-500/20 text-yellow-500 border border-yellow-500/30 animate-pulse uppercase tracking-wider">
+                  ⏳ In order book
+                </span>
+                <span v-else :class="['font-bold text-xs', pos.currentPnL >= 0 ? 'text-green-500' : 'text-red-500']">
+                  {{ pos.currentPnL > 0 ? '+' : '' }}${{ pos.currentPnL.toFixed(2) }}
+                </span>
+              </div>
             </div>
             
             <div class="text-[10px] flex flex-col gap-1" :class="marketStore.isDark ? 'text-gray-400' : 'text-gray-500'">
               <div class="flex justify-between px-1.5 py-1 rounded" :class="marketStore.isDark ? 'bg-[#161b22]' : 'bg-white shadow-sm border border-gray-100'">
-                <span>Вход: <b :class="marketStore.isDark ? 'text-white' : 'text-black'">{{ Math.round(pos.entry_price * 100) }}¢</b></span>
-                <span>Vol: <b :class="marketStore.isDark ? 'text-white' : 'text-black'">{{ pos.size.toFixed(1) }}</b></span>
+                <span>BUY: <b :class="marketStore.isDark ? 'text-white' : 'text-black'">{{ Math.round(pos.entry_price * 100) }}¢</b></span>
+                <span>VOL: <b :class="marketStore.isDark ? 'text-white' : 'text-black'">{{ pos.size.toFixed(1) }}</b></span>
               </div>
               
               <div class="flex justify-between px-1.5 font-mono">
                 <span :class="marketStore.isDark ? 'text-green-400' : 'text-green-600'">
-                  ТП: <b>{{ pos.tp_price ? Math.round(pos.tp_price * 100) + '¢' : '--' }}</b>
+                  TP: <b>{{ pos.tp_price ? Math.round(pos.tp_price * 100) + '¢' : '--' }}</b>
                 </span>
                 <span :class="marketStore.isDark ? 'text-red-400' : 'text-red-600'">
-                  СЛ: <b>{{ pos.sl_trigger_price ? Math.round(pos.sl_trigger_price * 100) + '¢' : '--' }}</b>
+                  SL: <b>{{ pos.sl_trigger_price ? Math.round(pos.sl_trigger_price * 100) + '¢' : '--' }}</b>
                 </span>
               </div>
             </div>
             
             <button @click="executePanicSell(pos.order_id)" class="w-full mt-1 bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white text-[10px] py-1 rounded transition-colors font-bold border border-red-500/30">
-              СБРОС ПО РЫНКУ
+              {{ pos.status === 'PENDING' ? 'ОТМЕНИТЬ ЗАЯВКУ' : 'СБРОС ПО РЫНКУ' }}
             </button>
           </div>
           
@@ -135,7 +140,7 @@
 
     <div v-else class="flex-1 overflow-y-auto p-6">
       <div class="max-w-6xl mx-auto">
-        <h2 class="text-2xl font-bold mb-6">Активные турниры</h2>
+        <h2 class="text-2xl font-bold mb-6">Dota 2</h2>
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           <div v-for="match in marketStore.matches" :key="match.event_id" :class="['border p-4 rounded-lg flex flex-col justify-between h-40 transition-colors', marketStore.isDark ? 'bg-[#0a0a0a] border-zinc-800 hover:border-zinc-600' : 'bg-white border-gray-300 hover:border-gray-400 shadow-sm']">
             <div>
@@ -145,7 +150,7 @@
             <div class="flex justify-between items-end mt-2">
               <div class="text-xs text-gray-500">Vol: <span class="font-bold" :class="marketStore.isDark ? 'text-white' : 'text-black'">${{ formatVolume(match.total_volume) }}</span></div>
               <button @click="openEvent(match)" :class="['px-3 py-1.5 rounded text-xs font-bold transition-colors', marketStore.isDark ? 'bg-[#00e5ff] text-black hover:bg-[#00b8cc]' : 'bg-[#00e5ff] text-white hover:bg-[#00b8cc] shadow-md']">
-                ТОРГОВАТЬ
+                GO
               </button>
             </div>
           </div>
@@ -206,7 +211,7 @@ const handlePlaceOrder = async (side, priceCents) => {
   const targetToken = activeTeam.value === 1 ? activeSubMarket.value.token_id_yes : activeSubMarket.value.token_id_no
   
   let finalTpCents = null
-  let finalSlCents = null  // 🎯 Добавили переменную под СЛ
+  let finalSlCents = null  // 🎯 Переменная СЛ
   let finalStrategy = 'custom'
 
   if (marketStore.tradingMode === 'custom') {
@@ -238,31 +243,31 @@ const handlePlaceOrder = async (side, priceCents) => {
   }
   
   try {
-    toast.info(`Отправка ордера: ${priceCents}¢...`)
+    toast.info(`Order Submission: ${priceCents}¢...`)
     const data = await tradeApi.placeOrder(reqBody)
     if (data.success) {
-      toast.success(`✅ Успешно! Куплено по ${priceCents}¢`)
+      toast.success(`✅ Succes! BUY ${priceCents}¢`)
       marketStore.loadPositions()
     } else {
-      toast.error(`❌ Отказ биржи: ${data.error}`)
+      toast.error(`❌ Exchange Rejection: ${data.error}`)
     }
   } catch (e) {
-    toast.error("❌ Ошибка сети: Сервер не отвечает")
+    toast.error("❌ Network Error: Server Not Responding")
   }
 }
 
 const executePanicSell = async (orderId) => {
   try {
-    toast.warning("⚡ Инициация сброса по рынку...")
+    toast.warning("⚡ Market Dump Initiation...")
     const data = await tradeApi.panicSell(orderId)
     if (data.success) {
       toast.success(`✅ ${data.message}`)
       marketStore.loadPositions()
     } else {
-      toast.error(`❌ Ошибка сброса: ${data.error}`)
+      toast.error(`❌ Error Dump: ${data.error}`)
     }
   } catch(e) {
-    toast.error("❌ Ошибка сети при сбросе")
+    toast.error("❌ Network Error With Dump")
   }
 }
 

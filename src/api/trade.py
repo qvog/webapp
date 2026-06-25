@@ -74,7 +74,7 @@ async def place_order(req: TradeRequest, background_tasks: BackgroundTasks):
                     size=safe_size, 
                     tp_price=safe_tp_price,
                     sl_trigger_price=sl_price, 
-                    status="OPEN"
+                    status="PENDING"
                 )
                 db.add(new_pos)
                 db.commit()
@@ -195,8 +195,8 @@ async def panic_sell_position(req: PanicRequest):
 async def get_open_positions():
     db = SessionLocal()
     try:
-        # Достаем все сделки, которые сейчас в работе
-        positions = db.query(Position).filter(Position.status == "OPEN").all()
+        # 🎯 ДОСТАЕМ И ОЖИДАЮЩИЕ В СТАКАНЕ, И УЖЕ КУПЛЕННЫЕ СДЕЛКИ
+        positions = db.query(Position).filter(Position.status.in_(["OPEN", "PENDING"])).all()
         
         pos_list = []
         for p in positions:
@@ -207,7 +207,8 @@ async def get_open_positions():
                 "size": p.size,
                 "tp_price": p.tp_price,
                 "sl_trigger_price": p.sl_trigger_price,
-                "strategy": p.strategy
+                "strategy": p.strategy,
+                "status": p.status
             })
             
         return {"success": True, "positions": pos_list}
