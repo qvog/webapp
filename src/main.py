@@ -60,6 +60,10 @@ app.include_router(trade_router)
 
 @app.get("/")
 def serve_ui():
-    base_dir = os.path.dirname(os.path.abspath(__file__))
+    # Поднимаемся на одну папку вверх (из src/ в корень проекта)
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    
+    # Теперь ищем файл в правильной корневой папке frontend/
     file_path = os.path.join(base_dir, "frontend", "index.html")
+    
     return FileResponse(file_path)

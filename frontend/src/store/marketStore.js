@@ -27,7 +27,7 @@ export const useMarketStore = defineStore('market', {
           this.matches = data.matches.sort((a, b) => b.total_volume - a.total_volume)
         }
       } catch (e) {
-        toast.error("Ошибка загрузки матчей")
+        toast.error("Failed to load matches")
       }
     },
 
@@ -54,7 +54,7 @@ export const useMarketStore = defineStore('market', {
           if (sub.token_id_no === tokenId) return sub.out2
         }
       }
-      return "Ордер"
+      return "Order"
     }
   }
 })

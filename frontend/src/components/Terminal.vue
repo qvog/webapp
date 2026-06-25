@@ -58,7 +58,7 @@
               :class="['w-full p-2 rounded text-left text-xs transition-colors border', activeSubMarket?.condition_id === sub.condition_id ? (marketStore.isDark ? 'border-[#00e5ff] bg-[#00e5ff]/10 text-white' : 'border-[#00e5ff] bg-cyan-50 text-black font-bold') : (marketStore.isDark ? 'border-transparent bg-black text-gray-400 hover:bg-zinc-900' : 'border-gray-200 bg-gray-50 text-gray-600 hover:bg-gray-100')]"
             >
               <span class="block whitespace-normal break-words leading-snug">
-                {{ sub.question.replace('Winner of the match', 'Исход матча') }}
+                {{ sub.question }}
               </span>
             </button>
           </div>
@@ -130,7 +130,7 @@
             </div>
             
             <button @click="executePanicSell(pos.order_id)" class="w-full mt-1 bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white text-[10px] py-1 rounded transition-colors font-bold border border-red-500/30">
-              {{ pos.status === 'PENDING' ? 'ОТМЕНИТЬ ЗАЯВКУ' : 'СБРОС ПО РЫНКУ' }}
+              {{ pos.status === 'PENDING' ? 'CANCEL ORDER' : 'MARKET DUMP' }}
             </button>
           </div>
           
@@ -246,7 +246,7 @@ const handlePlaceOrder = async (side, priceCents) => {
     toast.info(`Order Submission: ${priceCents}¢...`)
     const data = await tradeApi.placeOrder(reqBody)
     if (data.success) {
-      toast.success(`✅ Succes! BUY ${priceCents}¢`)
+      toast.success(`✅ Success! BUY ${priceCents}¢`)
       marketStore.loadPositions()
     } else {
       toast.error(`❌ Exchange Rejection: ${data.error}`)

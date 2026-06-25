@@ -51,7 +51,7 @@ export function useOrderBook() {
       if (onReadyCallback) onReadyCallback() // Сигнал, что можно центрировать стакан
     }).catch(() => { 
       isConnecting.value = false
-      toast.error("Не удалось загрузить слепок стакана")
+      toast.error("Failed to load order book snapshot")
     })
 
     // 2. Затем открываем живой поток (WebSocket)
@@ -60,7 +60,7 @@ export function useOrderBook() {
     ws.onopen = () => {
       let assets = [tokenYes]; if (tokenNo) assets.push(tokenNo)
       ws.send(JSON.stringify({ assets_ids: assets, type: "market" }))
-      toast.success("HFT Синхронизация установлена", { timeout: 1500 })
+      toast.success("Synced!", { timeout: 1500 })
     }
 
     ws.onmessage = (event) => {
@@ -95,8 +95,6 @@ export function useOrderBook() {
         }
       })
       // Принудительно триггерим реактивность Vue
-      rawBidsYes.value = new Map(rawBidsYes.value); rawAsksYes.value = new Map(rawAsksYes.value)
-      rawBidsNo.value = new Map(rawBidsNo.value); rawAsksNo.value = new Map(rawAsksNo.value)
     }
 
     // Поддержка соединения
