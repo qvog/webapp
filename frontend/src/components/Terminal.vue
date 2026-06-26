@@ -81,7 +81,6 @@
           :rawAsksYes="rawAsksYes"
           :rawBidsNo="rawBidsNo"
           :rawAsksNo="rawAsksNo"
-          :openPositions="marketStore.openPositions"
           :currentTokenId="activeTeam === 1 ? activeSubMarket.token_id_yes : activeSubMarket.token_id_no"
           @placeOrder="handlePlaceOrder"
         />
