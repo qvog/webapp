@@ -42,7 +42,7 @@ async def restart_orphaned_workers():
             asyncio.create_task(
                 monitor_and_manage_position(
                     order_id=pos.order_id, entry_price=pos.entry_price, tp_price=pos.tp_price,
-                    original_size=pos.size, token_id=pos.token_id, options=options, strategy=pos.strategy
+                    sl_price=pos.sl_trigger_price, original_size=pos.size, token_id=pos.token_id, options=options, strategy=pos.strategy
                 )
             )
             print(f"🟢 [СИСТЕМА] Воркер для ордера {pos.order_id} успешно перезапущен!")

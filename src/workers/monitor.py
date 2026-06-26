@@ -3,6 +3,7 @@ import asyncio
 import json
 import websockets
 import os
+import re # 🎯 ДОБАВЛЕНО ДЛЯ ПАРСИНГА ОШИБОК БАЛАНСА
 from datetime import datetime
 from py_clob_client_v2 import OrderArgs, OrderType
 from py_clob_client_v2.order_builder.constants import SELL
@@ -13,14 +14,14 @@ from src.database.models import Position
 
 POLY_WS_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 
-async def monitor_and_manage_position(order_id: str, entry_price: float, tp_price: float, original_size: float, token_id: str, options, strategy: str):
+async def monitor_and_manage_position(order_id: str, entry_price: float, tp_price: float, sl_price: float, original_size: float, token_id: str, options, strategy: str):
     print(f"👀 [Воркер] Наблюдаю за входом {order_id} (Стратегия: {strategy.upper()})...")
     client = get_clob_client()
     
     actual_size = 0
     is_filled = False
     
-    # ФАЗА 1: ЖДЕМ ПОКУПКУ (Опрос раз в 5 секунд - бережем лимиты)
+    # ФАЗА 1: ЖДЕМ ПОКУПКУ
     for _ in range(86400):
         try:
             order_info = await run_sync(client.get_order, order_id)
@@ -33,29 +34,42 @@ async def monitor_and_manage_position(order_id: str, entry_price: float, tp_pric
                 is_filled = True
                 print(f"⚙️ [Воркер] Позиция набрана. Куплено: {actual_size} акций.")
                 
-                # 🎯 НОВОЕ: Говорим базе и интерфейсу, что ордер перешел в рынок!
                 db = SessionLocal()
                 try:
                     pos = db.query(Position).filter(Position.order_id == order_id).first()
                     if pos: 
                         pos.status = "OPEN"
-                        pos.size = actual_size # Заодно сохраняем точный купленный объем (если налили меньше)
+                        pos.size = actual_size 
                         db.commit()
                 finally: db.close()
+                break 
                 
-                break # Выходим из ожидания, идем ставить Тейк-Профит
             elif status in ['CANCELED', 'EXPIRED']:
-                print(f"⚠️ [Воркер] Базовый ордер отменен. Отключаюсь.")
-                db = SessionLocal()
-                try:
-                    pos = db.query(Position).filter(Position.order_id == order_id).first()
-                    if pos:
-                        pos.status = "CANCELED"
-                        db.commit()
-                finally: db.close()
-                return
+                # 🎯 ЗАЩИТА ОТ ЧАСТИЧНЫХ ОТМЕН БАЗОВОГО ОРДЕРА
+                size_matched = order_data.get('size_matched')
+                if size_matched and float(size_matched) > 0:
+                    actual_size = int(float(size_matched) * 100) / 100.0
+                    is_filled = True
+                    print(f"⚠️ [Воркер] Базовый ордер отменен, но успели купить {actual_size} акций. Идем дальше!")
+                    db = SessionLocal()
+                    try:
+                        pos = db.query(Position).filter(Position.order_id == order_id).first()
+                        if pos: 
+                            pos.status = "OPEN"
+                            pos.size = actual_size 
+                            db.commit()
+                    finally: db.close()
+                    break
+                else:
+                    print(f"⚠️ [Воркер] Базовый ордер отменен. Отключаюсь.")
+                    db = SessionLocal()
+                    try:
+                        pos = db.query(Position).filter(Position.order_id == order_id).first()
+                        if pos: pos.status = "CANCELED"; db.commit()
+                    finally: db.close()
+                    return
         except Exception: pass
-        await asyncio.sleep(5) # 🎯 Снизили частоту спама в 5 раз!
+        await asyncio.sleep(5) 
         
     if not is_filled or actual_size == 0:
         db = SessionLocal()
@@ -79,11 +93,9 @@ async def monitor_and_manage_position(order_id: str, entry_price: float, tp_pric
             except Exception: pass
             await asyncio.sleep(2)
 
-    # ФАЗА 3: СТОП-ЛОСС РАДАР ЧЕРЕЗ WEBSOCKET (0 Задержки, 0 REST-запросов)
-    sl_trigger_price, sell_ratio = 0, 1.0 
-    if strategy in ['4c', '8c']: sl_trigger_price = entry_price - 0.12
-    elif strategy == 'match': sl_trigger_price, sell_ratio = entry_price * 0.5, 0.5 
-    elif strategy == 'sure': sl_trigger_price = entry_price * 0.5
+    # ФАЗА 3: СТОП-ЛОСС РАДАР ЧЕРЕЗ WEBSOCKET
+    sl_trigger_price, sell_ratio = sl_price, 1.0 
+    if strategy == 'match': sell_ratio = 0.5 
     sl_trigger_price = max(0.01, round(sl_trigger_price, 2))
     
     print(f"🛡️ [Воркер] Стоп-Лосс АКТИВЕН: {sl_trigger_price}$ (Слушаю WebSocket...)")
@@ -95,15 +107,13 @@ async def monitor_and_manage_position(order_id: str, entry_price: float, tp_pric
     empty_book_count = 0
     last_tp_check = time.time()
 
-    # Сначала делаем ОДИН снимок стакана, чтобы заполнить данные
     try:
         ob = await run_sync(client.get_order_book, token_id)
         for b in ob.get("bids", []): bids_book[float(b['price'])] = float(b['size'])
         for a in ob.get("asks", []): asks_book[float(a['price'])] = float(a['size'])
     except: pass
 
-    # Подключаемся к WebSocket для получения тиков
-    while True: # Внешний цикл для реконнектов
+    while True: 
         try:
             async with websockets.connect(POLY_WS_URL, ping_interval=None) as ws:
                 await ws.send(json.dumps({"assets_ids": [token_id], "type": "market"}))
@@ -118,10 +128,8 @@ async def monitor_and_manage_position(order_id: str, entry_price: float, tp_pric
 
                 try:
                     while True:
-                        # 1. Редкая проверка ТП и СИНХРОНИЗАЦИЯ СТАКАНА (раз в 15 секунд)
                         if time.time() - last_tp_check > 15:
                             last_tp_check = time.time()
-                            # А) Проверка тейк-профита
                             if tp_order_id:
                                 try:
                                     tp_info = await run_sync(client.get_order, tp_order_id)
@@ -149,7 +157,6 @@ async def monitor_and_manage_position(order_id: str, entry_price: float, tp_pric
                                             return
                                 except: pass
                             
-                            # Б) 🎯 ПРИНУДИТЕЛЬНАЯ СИНХРОНИЗАЦИЯ (Защита от слепых зон implied odds)
                             try:
                                 ob = await run_sync(client.get_order_book, token_id)
                                 if isinstance(ob, dict) and (ob.get("bids") or ob.get("asks")):
@@ -195,10 +202,9 @@ async def monitor_and_manage_position(order_id: str, entry_price: float, tp_pric
                                             if s == 0: asks_book.pop(p, None)
                                             else: asks_book[p] = s
 
-                        # 3. Логика Стоп-Лосса (Только если стакан живой)
                         if not bids_book and not asks_book:
                             empty_book_count += 1
-                            if empty_book_count > 20: # 20 тиков тишины = Матч завершен
+                            if empty_book_count > 20:
                                 print(f"🏁 [Воркер] Стакан пуст. Матч завершен!")
                                 db = SessionLocal()
                                 try:
@@ -214,15 +220,16 @@ async def monitor_and_manage_position(order_id: str, entry_price: float, tp_pric
                         best_ask = min(asks_book.keys()) if asks_book else 1
                         spread = best_ask - best_bid 
                         
-                        # Защита от сквизов (Игнорируем пустые стаканы ММ)
-                        if spread > 0.08:
+                        # 🎯 ИЗМЕНЕНО: Ослабляем защиту от спреда до 15 центов
+                        if spread > 0.15:
                             sl_confirmations = 0
                             continue 
                         
                         if 0 < best_bid <= sl_trigger_price:
                             sl_confirmations += 1
-                            if sl_confirmations < 4:
-                                continue # Ждем подтверждения
+                            # 🎯 ИЗМЕНЕНО: Реагируем за 2 тика, а не за 4
+                            if sl_confirmations < 2:
+                                continue 
                                 
                             print(f"🚨 [Воркер] СТОП-ЛОСС ПРОБИТ! Цена: {best_bid}$")
                             if tp_order_id:
@@ -230,10 +237,44 @@ async def monitor_and_manage_position(order_id: str, entry_price: float, tp_pric
                                 except: pass
                             
                             shares_to_sell = round(actual_size * sell_ratio, 2)
-                            sell_args = OrderArgs(price=0.01, size=shares_to_sell, side=SELL, token_id=token_id)
-                            sl_resp = await run_sync(client.create_and_post_order, order_args=sell_args, options=options, order_type=OrderType.GTC)
                             
-                            if sl_resp and sl_resp.get("success"):
+                            # 🎯 НОВАЯ БРОНЯ: Функция с авто-коррекцией баланса при частичном ТП
+                            async def safe_market_sell(t_size):
+                                current_size = t_size
+                                for _ in range(2): # Делаем максимум 2 попытки
+                                    try:
+                                        s_args = OrderArgs(price=0.01, size=current_size, side=SELL, token_id=token_id)
+                                        resp = await run_sync(client.create_and_post_order, order_args=s_args, options=options, order_type=OrderType.GTC)
+                                        
+                                        # Если биржа вернула JSON с ошибкой баланса
+                                        if resp and isinstance(resp, dict) and resp.get("error"):
+                                            err = resp.get("error")
+                                            if "balance" in err:
+                                                m = re.search(r"balance:\s*(\d+)", err)
+                                                if m:
+                                                    # Превращаем '7359092' микро-токенов в 7.35 акций
+                                                    current_size = int(int(m.group(1)) / 1000000.0 * 100) / 100.0
+                                                    print(f"🔄 [Воркер] Авто-коррекция объема: продаем {current_size} акций")
+                                                    if current_size <= 0: return None
+                                                    continue # Пробуем еще раз с новым объемом!
+                                        return resp
+                                    except Exception as e:
+                                        # Если клиент выбросил Exception (иногда py_clob_client делает так)
+                                        err = str(e)
+                                        if "balance" in err:
+                                            m = re.search(r"balance:\s*(\d+)", err)
+                                            if m:
+                                                current_size = int(int(m.group(1)) / 1000000.0 * 100) / 100.0
+                                                print(f"🔄 [Воркер] Авто-коррекция объема (Exc): продаем {current_size} акций")
+                                                if current_size <= 0: return None
+                                                continue
+                                        return None
+                                return None
+
+                            # Пытаемся продать через нашу безопасную функцию
+                            sl_resp = await safe_market_sell(shares_to_sell)
+                            
+                            if sl_resp and (isinstance(sl_resp, dict) and sl_resp.get("success")):
                                 print(f"✅ [Воркер] Позиция ликвидирована.")
                                 db = SessionLocal()
                                 try:
@@ -243,6 +284,8 @@ async def monitor_and_manage_position(order_id: str, entry_price: float, tp_pric
                                         pos.exit_price = best_bid
                                         db.commit()
                                 finally: db.close()
+                            else:
+                                print(f"❌ [Воркер] Ошибка при исполнении Стоп-Лосса.")
                             return 
                         else:
                             sl_confirmations = 0
@@ -250,5 +293,4 @@ async def monitor_and_manage_position(order_id: str, entry_price: float, tp_pric
                 finally:
                     ping_task.cancel()
         except Exception as e:
-            # Если вебсокет порвался, тихо спим 2 секунды и цикл while True подключит его заново
             await asyncio.sleep(2)

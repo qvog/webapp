@@ -86,7 +86,7 @@ async def place_order(req: TradeRequest, background_tasks: BackgroundTasks):
             # Запуск вынесенного воркера
             background_tasks.add_task(
                 monitor_and_manage_position, order_id=main_order_id, entry_price=safe_price,
-                tp_price=safe_tp_price, original_size=safe_size, token_id=str(req.token_id), 
+                tp_price=safe_tp_price, sl_price=sl_price, original_size=safe_size, token_id=str(req.token_id), 
                 options=options, strategy=strategy
             )
             return {"success": True, "order_id": main_order_id}
