@@ -19,13 +19,14 @@ export function useOrderBook() {
   const isConnecting = ref(false)
 
   let ws = null
-  let pingInterval = null
+  let watchdogInterval = null
   let activeMarketCache = null
   let metricsLoop = null
+  let lastMessageTime = Date.now() // 🎯 Запоминаем время последнего тика
 
   const disconnect = () => {
     if (ws) { ws.onclose = null; ws.close(); ws = null }
-    if (pingInterval) { clearInterval(pingInterval); pingInterval = null }
+    if (watchdogInterval) { clearInterval(watchdogInterval); watchdogInterval = null }
     if (metricsLoop) { clearInterval(metricsLoop); metricsLoop = null }
   }
 
@@ -48,29 +49,37 @@ export function useOrderBook() {
     ws.onopen = () => {
       let assets = [tokenYes]; if (tokenNo) assets.push(tokenNo)
       ws.send(JSON.stringify({ assets_ids: assets, type: "market" }))
-      toast.success("⚡ HFT Stream Connected", { timeout: 1500 })
+      toast.success("⚡ HFT M249 Stream Active", { timeout: 1500 })
+      
+      lastMessageTime = Date.now()
 
-      // 🎯 МЯГКИЙ PING: Просто держим связь, не обрывая сокет
-      pingInterval = setInterval(() => {
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send("PING")
+      // 🎯 ПАССИВНЫЙ WATCHDOG: Никаких отправок PING. Только слушаем!
+      watchdogInterval = setInterval(() => {
+        // Если от Полимаркета нет тиков дольше 15 секунд - мягко переподключаемся
+        if (Date.now() - lastMessageTime > 15000) {
+          console.warn("💀 HFT Watchdog: Stream dead (15s timeout), reconnecting...")
+          disconnect()
+          if (activeMarketCache) connectToMarket(activeMarketCache)
         }
-      }, 10000)
+      }, 5000)
     }
 
     ws.onmessage = (event) => {
-      if (event.data === "PONG") return // Игнорируем технические ответы
+      lastMessageTime = Date.now() // 🎯 Обновляем таймер жизни при ЛЮБОМ тике
+      
+      if (event.data === "PONG") return 
 
       let data;
       try { data = JSON.parse(event.data) } catch(e) { return }
       const events = Array.isArray(data) ? data : [data]
 
       events.forEach(ev => {
-        const evToken = ev.asset_id ? ev.asset_id.toLowerCase() : null
-        const targetLadder = evToken === tokenYes ? ladderYes : (evToken === tokenNo ? ladderNo : null)
-        if (!targetLadder) return
-
+        // 1. ПОЛНЫЙ СЛЕПОК (Синхронизация)
         if (ev.event_type === "book") {
+          const evToken = ev.asset_id ? ev.asset_id.toLowerCase() : null
+          const targetLadder = evToken === tokenYes ? ladderYes : (evToken === tokenNo ? ladderNo : null)
+          if (!targetLadder) return
+
           for (let i = 0; i < 99; i++) { targetLadder[i].bidSize = 0; targetLadder[i].askSize = 0; }
           ;(ev.bids || []).forEach(b => {
             const p = Math.round(parseFloat(b.price) * 100)
@@ -83,31 +92,36 @@ export function useOrderBook() {
           isConnecting.value = false
           if (onReadyCallback) { onReadyCallback(); onReadyCallback = null }
         }
+        
+        // 2. ПУЛЕМЕТ ДЕЛЬТ (M249)
         else if (ev.event_type === "price_change") {
-          const applyUpdates = (arr, isBid) => {
-            arr.forEach(i => {
-              const p = Math.round(parseFloat(i.price) * 100)
-              if (p >= 1 && p <= 99) {
-                if (isBid) targetLadder[99 - p].bidSize = parseFloat(i.size)
-                else targetLadder[99 - p].askSize = parseFloat(i.size)
+          ;(ev.price_changes || []).forEach(pc => {
+            const pcToken = pc.asset_id ? pc.asset_id.toLowerCase() : null
+            const targetLadder = pcToken === tokenYes ? ladderYes : (pcToken === tokenNo ? ladderNo : null)
+            if (!targetLadder) return 
+
+            const p = Math.round(parseFloat(pc.price) * 100)
+            if (p >= 1 && p <= 99) {
+              if (pc.side === "BUY") {
+                targetLadder[99 - p].bidSize = parseFloat(pc.size)
               }
-            })
-          }
-          if (ev.changes && ev.changes.length > 0) {
-            applyUpdates(ev.changes.filter(c => c.side === "BUY"), true)
-            applyUpdates(ev.changes.filter(c => c.side === "SELL"), false)
-          } else {
-            if (ev.bids && ev.bids.length > 0) applyUpdates(ev.bids, true)
-            if (ev.asks && ev.asks.length > 0) applyUpdates(ev.asks, false)
-          }
+              else if (pc.side === "SELL") {
+                targetLadder[99 - p].askSize = parseFloat(pc.size)
+              }
+            }
+          })
         }
       })
     }
 
-    // Восстанавливаем соединение, только если оно РЕАЛЬНО порвалось
-    ws.onclose = () => { if (activeMarketCache) setTimeout(() => connectToMarket(activeMarketCache), 1000) }
+    ws.onclose = () => { 
+      // Страховочный реконнект только при физическом обрыве сокета
+      if (activeMarketCache && Date.now() - lastMessageTime < 15000) {
+        setTimeout(() => connectToMarket(activeMarketCache), 1000) 
+      }
+    }
 
-    // 🎯 МЕТРИКИ: Считаем в дробных долях (0.74) для правильной работы PnL на фронтенде
+    // Метрики (Считаем в дробных долях 0.74 для PnL)
     metricsLoop = setInterval(() => {
       const calcMetrics = (ladder) => {
         let bB = 0, bA = 1
