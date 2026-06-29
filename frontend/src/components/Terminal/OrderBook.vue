@@ -95,18 +95,14 @@ const ladderRows = computed(() => {
   const rows = []
   const targetBids = props.activeTeam === 1 ? props.rawBidsYes : props.rawBidsNo
   const targetAsks = props.activeTeam === 1 ? props.rawAsksYes : props.rawAsksNo
-  const oppBids = props.activeTeam === 1 ? props.rawBidsNo : props.rawBidsYes
-  const oppAsks = props.activeTeam === 1 ? props.rawAsksNo : props.rawAsksYes
 
   for (let price = 99; price >= 1; price--) {
     let bidSize = 0, askSize = 0
     let pFloat = price / 100.0
-    if (targetBids.has(pFloat)) bidSize += targetBids.get(pFloat)
-    if (targetAsks.has(pFloat)) askSize += targetAsks.get(pFloat)
-
-    let impFloat = (100 - price) / 100.0
-    if (oppAsks.has(impFloat)) bidSize += oppAsks.get(impFloat)
-    if (oppBids.has(impFloat)) askSize += oppBids.get(impFloat)
+    
+    // Берем только чистый объем, без двойного подсчета!
+    if (targetBids.has(pFloat)) bidSize = targetBids.get(pFloat)
+    if (targetAsks.has(pFloat)) askSize = targetAsks.get(pFloat)
 
     rows.push({ price, bidSize, askSize })
   }

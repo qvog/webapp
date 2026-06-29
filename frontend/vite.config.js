@@ -8,7 +8,8 @@ export default defineConfig({
     tailwindcss(),
   ],
   server: {
-    port: 3000,
+    host: true, // 🎯 Меняем на true! Это откроет сервер для Windows/сети
+    port: 3005, // 🎯 Меняем порт, чтобы обойти кэш браузера
     proxy: {
       '/api': {
         target: 'http://127.0.0.1:8000',

@@ -69,6 +69,15 @@
         <div v-if="isConnecting" class="absolute inset-0 z-50 flex items-center justify-center backdrop-blur-sm rounded-lg" :class="marketStore.isDark ? 'bg-black/80' : 'bg-white/80'">
           <span class="text-[#00e5ff] text-sm font-bold animate-pulse">CONNECTION...</span>
         </div>
+        
+        <div v-if="activeSubMarket" class="mb-2 flex items-center justify-between border-b pb-2" :class="marketStore.isDark ? 'border-gray-800' : 'border-gray-200'">
+          <h2 class="text-sm font-bold truncate pr-4" :class="marketStore.isDark ? 'text-gray-200' : 'text-gray-800'" :title="activeSubMarket.question">
+            {{ activeSubMarket.question }}
+          </h2>
+          <div :class="['px-2 py-0.5 rounded text-[11px] font-mono font-bold border transition-colors whitespace-nowrap', spreadBadgeClass]">
+            SPREAD: {{ activeSpreadCents }}¢
+          </div>
+        </div>
 
         <OrderBook 
           ref="orderBookRef"
@@ -171,7 +180,21 @@ import { tradeApi } from '../api/tradeService'
 const toast = useToast()
 const marketStore = useMarketStore()
 
-const { rawBidsYes, rawAsksYes, rawBidsNo, rawAsksNo, isConnecting, connectToMarket, disconnect } = useOrderBook()
+import { computed } from 'vue'
+
+const activeSpreadCents = computed(() => {
+  const sp = activeTeam.value === 1 ? spreadYes.value : spreadNo.value
+  return Math.round(sp * 100)
+})
+
+const spreadBadgeClass = computed(() => {
+  const cents = activeSpreadCents.value
+  if (cents <= 2) return 'bg-green-500/20 text-green-500 border-green-500/50'
+  if (cents <= 5) return 'bg-yellow-500/20 text-yellow-500 border-yellow-500/50'
+  return 'bg-red-500/20 text-red-500 border-red-500/50'
+})
+
+const { rawBidsYes, rawAsksYes, rawBidsNo, rawAsksNo, spreadYes, spreadNo, isConnecting, connectToMarket, disconnect } = useOrderBook()
 
 const currentEvent = ref(null)
 const activeSubMarket = ref(null)
