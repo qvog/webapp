@@ -88,6 +88,8 @@
           :team2Name="activeSubMarket.out2"
           :ladderYes="ladderYes"
           :ladderNo="ladderNo"
+          :bestBid="activeTeam === 1 ? bestBidYes : bestBidNo" 
+          :bestAsk="activeTeam === 1 ? bestAskYes : bestAskNo"
           :currentTokenId="activeTeam === 1 ? activeSubMarket.token_id_yes : activeSubMarket.token_id_no"
           @placeOrder="handlePlaceOrder"
         />

@@ -4,8 +4,6 @@ import { useToast } from 'vue-toastification'
 export function useOrderBook() {
   const toast = useToast()
 
-  // 🎯 СЕКРЕТ №1: ПРЕД-АЛЛОКАЦИЯ ПАМЯТИ
-  // Создаем 99 строк один раз. Никаких удалений. index = 99 - price.
   const createLadder = () => reactive(Array.from({ length: 99 }, (_, i) => ({
     price: 99 - i,
     bidSize: 0,
@@ -21,21 +19,13 @@ export function useOrderBook() {
   const isConnecting = ref(false)
 
   let ws = null
-  let watchdogTimer = null
+  let pingInterval = null
   let activeMarketCache = null
   let metricsLoop = null
 
-  const resetWatchdog = () => {
-    if (watchdogTimer) clearTimeout(watchdogTimer)
-    watchdogTimer = setTimeout(() => {
-      console.warn("💀 HFT Watchdog: Reconnecting...")
-      if (activeMarketCache) connectToMarket(activeMarketCache)
-    }, 3000)
-  }
-
   const disconnect = () => {
     if (ws) { ws.onclose = null; ws.close(); ws = null }
-    if (watchdogTimer) { clearTimeout(watchdogTimer); watchdogTimer = null }
+    if (pingInterval) { clearInterval(pingInterval); pingInterval = null }
     if (metricsLoop) { clearInterval(metricsLoop); metricsLoop = null }
   }
 
@@ -47,7 +37,7 @@ export function useOrderBook() {
     const tokenYes = subMarket.token_id_yes.toLowerCase()
     const tokenNo = subMarket.token_id_no ? subMarket.token_id_no.toLowerCase() : null
 
-    // Быстрая очистка стаканов (обнуляем цифры, но не удаляем строки!)
+    // Мгновенная очистка без удаления строк
     for (let i = 0; i < 99; i++) {
       ladderYes[i].bidSize = 0; ladderYes[i].askSize = 0;
       ladderNo[i].bidSize = 0; ladderNo[i].askSize = 0;
@@ -58,14 +48,18 @@ export function useOrderBook() {
     ws.onopen = () => {
       let assets = [tokenYes]; if (tokenNo) assets.push(tokenNo)
       ws.send(JSON.stringify({ assets_ids: assets, type: "market" }))
-      toast.success("⚡ O(1) HFT Engine Active", { timeout: 1500 })
-      resetWatchdog()
+      toast.success("⚡ HFT Stream Connected", { timeout: 1500 })
+
+      // 🎯 МЯГКИЙ PING: Просто держим связь, не обрывая сокет
+      pingInterval = setInterval(() => {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send("PING")
+        }
+      }, 10000)
     }
 
     ws.onmessage = (event) => {
-      if (event.data === "PING") { ws.send("PONG"); return }
-      if (event.data === "PONG") return
-      resetWatchdog()
+      if (event.data === "PONG") return // Игнорируем технические ответы
 
       let data;
       try { data = JSON.parse(event.data) } catch(e) { return }
@@ -76,8 +70,6 @@ export function useOrderBook() {
         const targetLadder = evToken === tokenYes ? ladderYes : (evToken === tokenNo ? ladderNo : null)
         if (!targetLadder) return
 
-        // 🎯 СЕКРЕТ №2: ТОЧЕЧНЫЕ МУТАЦИИ O(1)
-        // Vue мгновенно обновляет только ту ячейку, куда прилетели данные
         if (ev.event_type === "book") {
           for (let i = 0; i < 99; i++) { targetLadder[i].bidSize = 0; targetLadder[i].askSize = 0; }
           ;(ev.bids || []).forEach(b => {
@@ -112,9 +104,10 @@ export function useOrderBook() {
       })
     }
 
-    ws.onclose = () => { if (activeMarketCache) setTimeout(() => connectToMarket(activeMarketCache), 300) }
+    // Восстанавливаем соединение, только если оно РЕАЛЬНО порвалось
+    ws.onclose = () => { if (activeMarketCache) setTimeout(() => connectToMarket(activeMarketCache), 1000) }
 
-    // Метрики (Спред и цены) считаем тихо на фоне, не трогая DOM
+    // 🎯 МЕТРИКИ: Считаем в дробных долях (0.74) для правильной работы PnL на фронтенде
     metricsLoop = setInterval(() => {
       const calcMetrics = (ladder) => {
         let bB = 0, bA = 1
@@ -122,6 +115,7 @@ export function useOrderBook() {
           if (ladder[i].bidSize > 0 && (ladder[i].price / 100) > bB) bB = ladder[i].price / 100
           if (ladder[i].askSize > 0 && (ladder[i].price / 100) < bA) bA = ladder[i].price / 100
         }
+        if (bA === 1) bA = 0
         return { bB, bA, sp: Math.max(0, bA - bB) }
       }
       const mY = calcMetrics(ladderYes); bestBidYes.value = mY.bB; bestAskYes.value = mY.bA; spreadYes.value = mY.sp;
