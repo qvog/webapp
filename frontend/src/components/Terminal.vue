@@ -86,10 +86,8 @@
           v-model:activeTeam="activeTeam"
           :team1Name="activeSubMarket.out1"
           :team2Name="activeSubMarket.out2"
-          :rawBidsYes="rawBidsYes"
-          :rawAsksYes="rawAsksYes"
-          :rawBidsNo="rawBidsNo"
-          :rawAsksNo="rawAsksNo"
+          :ladderYes="ladderYes"
+          :ladderNo="ladderNo"
           :currentTokenId="activeTeam === 1 ? activeSubMarket.token_id_yes : activeSubMarket.token_id_no"
           @placeOrder="handlePlaceOrder"
         />
@@ -102,9 +100,9 @@
         </div>
         
         <div class="flex-1 overflow-y-auto custom-scrollbar space-y-2 pr-1">
-          <div v-if="marketStore.openPositions.length === 0" class="text-center text-gray-500 text-xs mt-10">Empty</div>
+          <div v-if="livePositions.length === 0" class="text-center text-gray-500 text-xs mt-10">Empty</div>
           
-          <div v-for="pos in marketStore.openPositions" :key="pos.order_id" :class="['border p-2 rounded flex flex-col gap-1.5 transition-colors', marketStore.isDark ? 'bg-black border-zinc-800 hover:border-zinc-700' : 'bg-gray-50 border-gray-200 hover:border-gray-300']">
+          <div v-for="pos in livePositions" :key="pos.order_id" :class="['border p-2 rounded flex flex-col gap-1.5 transition-colors', marketStore.isDark ? 'bg-black border-zinc-800 hover:border-zinc-700' : 'bg-gray-50 border-gray-200 hover:border-gray-300']">
             
             <div class="flex justify-between items-center">
               <span class="font-bold text-xs truncate max-w-[120px]" :title="marketStore.getTeamNameFromToken(pos.token_id)">
@@ -115,8 +113,8 @@
                 <span v-if="pos.status === 'PENDING'" class="text-[9px] px-1.5 py-0.5 rounded font-bold bg-yellow-500/20 text-yellow-500 border border-yellow-500/30 animate-pulse uppercase tracking-wider">
                   ⏳ In order book
                 </span>
-                <span v-else :class="['font-bold text-xs', pos.currentPnL >= 0 ? 'text-green-500' : 'text-red-500']">
-                  {{ pos.currentPnL > 0 ? '+' : '' }}${{ pos.currentPnL.toFixed(2) }}
+                <span v-else :class="['font-bold text-xs transition-colors', pos.liveDiff >= 0 ? 'text-green-500' : 'text-red-500']">
+                  {{ pos.liveDiff > 0 ? '+' : '' }}{{ pos.liveDiff }}¢
                 </span>
               </div>
             </div>
@@ -169,7 +167,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, onMounted, onUnmounted, nextTick, computed } from 'vue'
 import { useToast } from 'vue-toastification'
 import OrderBook from './Terminal/OrderBook.vue'
 
@@ -180,8 +178,21 @@ import { tradeApi } from '../api/tradeService'
 const toast = useToast()
 const marketStore = useMarketStore()
 
-import { computed } from 'vue'
+// 1. СНАЧАЛА инициализируем переменные стакана
+const { 
+  ladderYes, ladderNo, 
+  spreadYes, spreadNo, 
+  bestBidYes, bestBidNo, 
+  isConnecting, connectToMarket, disconnect 
+} = useOrderBook()
 
+// 2. ЗАТЕМ объявляем локальные переменные
+const currentEvent = ref(null)
+const activeSubMarket = ref(null)
+const activeTeam = ref(1)
+const orderBookRef = ref(null)
+
+// 3. И ТОЛЬКО ПОТОМ используем их в Computed (чтобы не было ошибок загрузки)
 const activeSpreadCents = computed(() => {
   const sp = activeTeam.value === 1 ? spreadYes.value : spreadNo.value
   return Math.round(sp * 100)
@@ -194,12 +205,33 @@ const spreadBadgeClass = computed(() => {
   return 'bg-red-500/20 text-red-500 border-red-500/50'
 })
 
-const { rawBidsYes, rawAsksYes, rawBidsNo, rawAsksNo, spreadYes, spreadNo, isConnecting, connectToMarket, disconnect } = useOrderBook()
+// 🎯 ЖИВОЙ PnL (Связан с позициями и стаканом)
+const livePositions = computed(() => {
+  return marketStore.openPositions.map(pos => {
+    // Если позиция закрыта, берем финальный профит
+    if (pos.status === 'CLOSED_TP' || pos.status === 'CLOSED_SL' || pos.status === 'RESOLVED') {
+      const exitP = pos.exit_price || pos.entry_price;
+      const profitCents = Math.round((exitP - pos.entry_price) * 100);
+      return { ...pos, liveDiff: profitCents };
+    }
 
-const currentEvent = ref(null)
-const activeSubMarket = ref(null)
-const activeTeam = ref(1)
-const orderBookRef = ref(null)
+    // Если открыта — считаем по живому стакану
+    let currentMarketPrice = 0;
+    
+    if (activeSubMarket.value) {
+      if (pos.token_id === activeSubMarket.value.token_id_yes) {
+        currentMarketPrice = bestBidYes.value;
+      } else if (pos.token_id === activeSubMarket.value.token_id_no) {
+        currentMarketPrice = bestBidNo.value;
+      }
+    }
+    
+    if (!currentMarketPrice) currentMarketPrice = pos.entry_price;
+
+    const profitCents = Math.round((currentMarketPrice - pos.entry_price) * 100);
+    return { ...pos, liveDiff: profitCents, currentMarketPrice };
+  });
+});
 
 const handleKeydown = (e) => {
   if (e.code === 'Space' && currentEvent.value && e.target.tagName !== 'INPUT') {
@@ -233,7 +265,7 @@ const handlePlaceOrder = async (side, priceCents) => {
   const targetToken = activeTeam.value === 1 ? activeSubMarket.value.token_id_yes : activeSubMarket.value.token_id_no
   
   let finalTpCents = null
-  let finalSlCents = null  // 🎯 Переменная СЛ
+  let finalSlCents = null  
   let finalStrategy = 'custom'
 
   if (marketStore.tradingMode === 'custom') {
@@ -260,7 +292,7 @@ const handlePlaceOrder = async (side, priceCents) => {
     risk_percent: 100, 
     is_custom_limit: true,
     take_profit_price: finalTpCents ? Math.min(0.99, finalTpCents / 100.0) : null,
-    stop_loss_price: finalSlCents ? Math.max(0.01, finalSlCents / 100.0) : null, // 🎯 ОТПРАВЛЯЕМ НА СЕРВЕР
+    stop_loss_price: finalSlCents ? Math.max(0.01, finalSlCents / 100.0) : null,
     strategy: finalStrategy
   }
   

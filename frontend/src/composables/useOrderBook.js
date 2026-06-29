@@ -1,93 +1,106 @@
-import { shallowRef, ref } from 'vue'
+import { reactive, ref } from 'vue'
 import { useToast } from 'vue-toastification'
 
 export function useOrderBook() {
   const toast = useToast()
-  
-  // 1. СЛОЙ РЕНДЕРА (Сюда Vue смотрит для отрисовки интерфейса)
-  const renderBidsYes = shallowRef(new Map())
-  const renderAsksYes = shallowRef(new Map())
-  const renderBidsNo = shallowRef(new Map())
-  const renderAsksNo = shallowRef(new Map())
 
-  // Переменные для Спреда и лучших цен
-  const spreadYes = ref(0)
-  const spreadNo = ref(0)
-  const bestBidYes = ref(0)
-  const bestAskYes = ref(1)
-  const bestBidNo = ref(0)
-  const bestAskNo = ref(1)
+  // 🎯 СЕКРЕТ №1: ПРЕД-АЛЛОКАЦИЯ ПАМЯТИ
+  // Создаем 99 строк один раз. Никаких удалений. index = 99 - price.
+  const createLadder = () => reactive(Array.from({ length: 99 }, (_, i) => ({
+    price: 99 - i,
+    bidSize: 0,
+    askSize: 0
+  })))
 
+  const ladderYes = createLadder()
+  const ladderNo = createLadder()
+
+  const spreadYes = ref(0); const spreadNo = ref(0)
+  const bestBidYes = ref(0); const bestAskYes = ref(1)
+  const bestBidNo = ref(0); const bestAskNo = ref(1)
   const isConnecting = ref(false)
 
   let ws = null
-  let pingInt = null
-  let renderLoop = null
+  let watchdogTimer = null
+  let activeMarketCache = null
+  let metricsLoop = null
 
-  // 2. СЛОЙ ДАННЫХ (Быстрые словари, которые не тормозят браузер)
-  let rawBidsYes = new Map()
-  let rawAsksYes = new Map()
-  let rawBidsNo = new Map()
-  let rawAsksNo = new Map()
-  
-  let isDirty = false 
-  const DEPTH = 30 // Отрисовываем только топ-30 строк стакана для скорости
+  const resetWatchdog = () => {
+    if (watchdogTimer) clearTimeout(watchdogTimer)
+    watchdogTimer = setTimeout(() => {
+      console.warn("💀 HFT Watchdog: Reconnecting...")
+      if (activeMarketCache) connectToMarket(activeMarketCache)
+    }, 3000)
+  }
 
   const disconnect = () => {
-    if (ws) { ws.close(); ws = null }
-    if (pingInt) { clearInterval(pingInt); pingInt = null }
-    if (renderLoop) { clearInterval(renderLoop); renderLoop = null }
+    if (ws) { ws.onclose = null; ws.close(); ws = null }
+    if (watchdogTimer) { clearTimeout(watchdogTimer); watchdogTimer = null }
+    if (metricsLoop) { clearInterval(metricsLoop); metricsLoop = null }
   }
 
   const connectToMarket = (subMarket, onReadyCallback = null) => {
     disconnect()
     isConnecting.value = true
-    
+    activeMarketCache = subMarket
+
     const tokenYes = subMarket.token_id_yes.toLowerCase()
     const tokenNo = subMarket.token_id_no ? subMarket.token_id_no.toLowerCase() : null
-    
-    rawBidsYes.clear(); rawAsksYes.clear(); rawBidsNo.clear(); rawAsksNo.clear()
-    isDirty = true
+
+    // Быстрая очистка стаканов (обнуляем цифры, но не удаляем строки!)
+    for (let i = 0; i < 99; i++) {
+      ladderYes[i].bidSize = 0; ladderYes[i].askSize = 0;
+      ladderNo[i].bidSize = 0; ladderNo[i].askSize = 0;
+    }
 
     ws = new WebSocket(`wss://ws-subscriptions-clob.polymarket.com/ws/market`)
-    
+
     ws.onopen = () => {
       let assets = [tokenYes]; if (tokenNo) assets.push(tokenNo)
       ws.send(JSON.stringify({ assets_ids: assets, type: "market" }))
-      toast.success("HFT Engine: 20 FPS Active", { timeout: 1500 })
+      toast.success("⚡ O(1) HFT Engine Active", { timeout: 1500 })
+      resetWatchdog()
     }
 
     ws.onmessage = (event) => {
+      if (event.data === "PING") { ws.send("PONG"); return }
       if (event.data === "PONG") return
+      resetWatchdog()
+
       let data;
       try { data = JSON.parse(event.data) } catch(e) { return }
-
       const events = Array.isArray(data) ? data : [data]
 
       events.forEach(ev => {
         const evToken = ev.asset_id ? ev.asset_id.toLowerCase() : null
-        let bBook = evToken === tokenYes ? rawBidsYes : (evToken === tokenNo ? rawBidsNo : null)
-        let aBook = evToken === tokenYes ? rawAsksYes : (evToken === tokenNo ? rawAsksNo : null)
-        if (!bBook || !aBook) return
+        const targetLadder = evToken === tokenYes ? ladderYes : (evToken === tokenNo ? ladderNo : null)
+        if (!targetLadder) return
 
+        // 🎯 СЕКРЕТ №2: ТОЧЕЧНЫЕ МУТАЦИИ O(1)
+        // Vue мгновенно обновляет только ту ячейку, куда прилетели данные
         if (ev.event_type === "book") {
-          bBook.clear(); aBook.clear();
-          (ev.bids || []).forEach(b => bBook.set(parseFloat(b.price), parseFloat(b.size)));
-          (ev.asks || []).forEach(a => aBook.set(parseFloat(a.price), parseFloat(a.size)));
-          isDirty = true
+          for (let i = 0; i < 99; i++) { targetLadder[i].bidSize = 0; targetLadder[i].askSize = 0; }
+          ;(ev.bids || []).forEach(b => {
+            const p = Math.round(parseFloat(b.price) * 100)
+            if (p >= 1 && p <= 99) targetLadder[99 - p].bidSize = parseFloat(b.size)
+          });
+          ;(ev.asks || []).forEach(a => {
+            const p = Math.round(parseFloat(a.price) * 100)
+            if (p >= 1 && p <= 99) targetLadder[99 - p].askSize = parseFloat(a.size)
+          });
           isConnecting.value = false
           if (onReadyCallback) { onReadyCallback(); onReadyCallback = null }
-        } else {
-          // Парсим точечные обновления цен
+        }
+        else if (ev.event_type === "price_change") {
           const applyUpdates = (arr, isBid) => {
             arr.forEach(i => {
-              const p = parseFloat(i.price), s = parseFloat(i.size)
-              if (s === 0) { isBid ? bBook.delete(p) : aBook.delete(p) }
-              else { isBid ? bBook.set(p, s) : aBook.set(p, s) }
-              isDirty = true
+              const p = Math.round(parseFloat(i.price) * 100)
+              if (p >= 1 && p <= 99) {
+                if (isBid) targetLadder[99 - p].bidSize = parseFloat(i.size)
+                else targetLadder[99 - p].askSize = parseFloat(i.size)
+              }
             })
           }
-
           if (ev.changes && ev.changes.length > 0) {
             applyUpdates(ev.changes.filter(c => c.side === "BUY"), true)
             applyUpdates(ev.changes.filter(c => c.side === "SELL"), false)
@@ -99,66 +112,26 @@ export function useOrderBook() {
       })
     }
 
-    // 🎯 ДВИЖОК: Жесткий цикл рендера (50мс = 20 раз в секунду)
-    renderLoop = setInterval(() => {
-      if (!isDirty) return
+    ws.onclose = () => { if (activeMarketCache) setTimeout(() => connectToMarket(activeMarketCache), 300) }
 
-      const extract = (bMap, aMap) => {
-        let bArr = [], aArr = []
-        for (let [p, s] of bMap.entries()) bArr.push({p, s})
-        for (let [p, s] of aMap.entries()) aArr.push({p, s})
-
-        bArr.sort((a, b) => b.p - a.p) // Bids: Лучшие сверху (убывание)
-        aArr.sort((a, b) => a.p - b.p) // Asks: Лучшие снизу (возрастание)
-
-        const bestB = bArr.length > 0 ? bArr[0].p : 0
-        const bestA = aArr.length > 0 ? aArr[0].p : 1
-
-        return {
-          bids: new Map(bArr.slice(0, DEPTH).map(x => [x.p, x.s])),
-          asks: new Map(aArr.slice(0, DEPTH).map(x => [x.p, x.s])),
-          bestB,
-          bestA,
-          spread: Math.max(0, bestA - bestB)
+    // Метрики (Спред и цены) считаем тихо на фоне, не трогая DOM
+    metricsLoop = setInterval(() => {
+      const calcMetrics = (ladder) => {
+        let bB = 0, bA = 1
+        for (let i = 0; i < 99; i++) {
+          if (ladder[i].bidSize > 0 && (ladder[i].price / 100) > bB) bB = ladder[i].price / 100
+          if (ladder[i].askSize > 0 && (ladder[i].price / 100) < bA) bA = ladder[i].price / 100
         }
+        return { bB, bA, sp: Math.max(0, bA - bB) }
       }
-
-      // Обновляем команду 1
-      const yesData = extract(rawBidsYes, rawAsksYes)
-      renderBidsYes.value = yesData.bids
-      renderAsksYes.value = yesData.asks
-      bestBidYes.value = yesData.bestB
-      bestAskYes.value = yesData.bestA
-      spreadYes.value = yesData.spread
-
-      // Обновляем команду 2
-      const noData = extract(rawBidsNo, rawAsksNo)
-      renderBidsNo.value = noData.bids
-      renderAsksNo.value = noData.asks
-      bestBidNo.value = noData.bestB
-      bestAskNo.value = noData.bestA
-      spreadNo.value = noData.spread
-
-      isDirty = false
-    }, 50) 
-
-    // Пингуем вебсокет, чтобы не отключился
-    pingInt = setInterval(() => { if (ws?.readyState === WebSocket.OPEN) ws.send("PING"); }, 10000)
+      const mY = calcMetrics(ladderYes); bestBidYes.value = mY.bB; bestAskYes.value = mY.bA; spreadYes.value = mY.sp;
+      const mN = calcMetrics(ladderNo); bestBidNo.value = mN.bB; bestAskNo.value = mN.bA; spreadNo.value = mN.sp;
+    }, 100)
   }
 
-  return { 
-    rawBidsYes: renderBidsYes, 
-    rawAsksYes: renderAsksYes, 
-    rawBidsNo: renderBidsNo, 
-    rawAsksNo: renderAsksNo, 
-    spreadYes, 
-    spreadNo, 
-    bestBidYes, 
-    bestAskYes, 
-    bestBidNo, 
-    bestAskNo,
-    isConnecting, 
-    connectToMarket, 
-    disconnect 
+  return {
+    ladderYes, ladderNo,
+    spreadYes, spreadNo, bestBidYes, bestAskYes, bestBidNo, bestAskNo,
+    isConnecting, connectToMarket, disconnect
   }
 }

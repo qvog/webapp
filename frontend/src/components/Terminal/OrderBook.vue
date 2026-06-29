@@ -44,7 +44,7 @@
     
     <div id="ladder-container" class="flex-1 overflow-y-auto scroll-smooth custom-scrollbar relative">
       <div 
-        v-for="row in ladderRows" :key="row.price" 
+        v-for="row in activeLadder" :key="row.price" 
         class="grid grid-cols-3 border-b hover:bg-[#00e5ff]/10 transition-colors group cursor-crosshair h-7 relative"
         :class="[isDark ? 'border-zinc-800/50' : 'border-gray-200', isMyOrder(row.price) ? (isDark ? 'bg-yellow-900/20' : 'bg-yellow-100') : '']"
       >
@@ -74,97 +74,83 @@
 </template>
 
 <script setup>
-import { computed, watch } from 'vue'
+import { ref, computed } from 'vue'
+import { useMarketStore } from '../../store/marketStore'
 
 const props = defineProps({
   isDark: Boolean,
   activeTeam: Number,
   team1Name: String,
   team2Name: String,
-  rawBidsYes: Map,
-  rawAsksYes: Map,
-  rawBidsNo: Map,
-  rawAsksNo: Map,
-  openPositions: Array,
+  ladderYes: Array,
+  ladderNo: Array,
   currentTokenId: String
 })
 
 const emit = defineEmits(['update:activeTeam', 'placeOrder'])
+const orderBookContainer = ref(null)
+const marketStore = useMarketStore()
 
-const ladderRows = computed(() => {
-  const rows = []
-  const targetBids = props.activeTeam === 1 ? props.rawBidsYes : props.rawBidsNo
-  const targetAsks = props.activeTeam === 1 ? props.rawAsksYes : props.rawAsksNo
+const activeLadder = computed(() => props.activeTeam === 1 ? props.ladderYes : props.ladderNo)
 
-  for (let price = 99; price >= 1; price--) {
-    let bidSize = 0, askSize = 0
-    let pFloat = price / 100.0
-    
-    // Берем только чистый объем, без двойного подсчета!
-    if (targetBids.has(pFloat)) bidSize = targetBids.get(pFloat)
-    if (targetAsks.has(pFloat)) askSize = targetAsks.get(pFloat)
-
-    rows.push({ price, bidSize, askSize })
-  }
-  return rows
-})
-
-const bestAsk = computed(() => {
-  let best = 100
-  for(let r of ladderRows.value) { if(r.askSize > 0 && r.price < best) best = r.price }
-  return best === 100 ? 0 : best
-})
-
+// 🎯 ВЕРНУЛИ: Ищем лучшую цену покупки для подсветки спреда
 const bestBid = computed(() => {
-  let best = 0
-  for(let r of ladderRows.value) { if(r.bidSize > 0 && r.price > best) best = r.price }
-  return best
+  if (!activeLadder.value) return 0
+  for (let i = 0; i < 99; i++) {
+    if (activeLadder.value[i].bidSize > 0) return activeLadder.value[i].price
+  }
+  return 0
 })
 
-const maxVolume = computed(() => {
-  let max = 0
-  ladderRows.value.forEach(r => {
-    if (r.bidSize > max) max = r.bidSize
-    if (r.askSize > max) max = r.askSize
-  })
-  return max < 500 ? 500 : max
+// 🎯 ВЕРНУЛИ: Ищем лучшую цену продажи для подсветки спреда
+const bestAsk = computed(() => {
+  if (!activeLadder.value) return 100
+  for (let i = 98; i >= 0; i--) {
+    if (activeLadder.value[i].askSize > 0) return activeLadder.value[i].price
+  }
+  return 100
 })
 
-const getVolumeBarWidth = (size) => Math.min(100, (size / maxVolume.value) * 100)
-
-const getPriceColorClass = (row) => {
-  if (row.bidSize > 0 && row.askSize === 0) return props.isDark ? 'text-green-400 bg-green-900/10' : 'text-green-600 bg-green-50'
-  if (row.askSize > 0 && row.bidSize === 0) return props.isDark ? 'text-red-400 bg-red-900/10' : 'text-red-600 bg-red-50'
-  if (row.bidSize > 0 && row.askSize > 0) return 'text-yellow-500 bg-yellow-500/10'
-  return 'text-gray-500'
-}
-
+// 🎯 ВЕРНУЛИ: Проверяем, есть ли на этой цене наш ордер (подсветка синим)
 const isMyOrder = (price) => {
-  if (!props.currentTokenId || !props.openPositions) return false
-  return props.openPositions.some(pos => pos.token_id === props.currentTokenId && Math.round(pos.entry_price * 100) === price)
+  return marketStore.openPositions.some(p => 
+    p.token_id === props.currentTokenId && 
+    p.status === 'PENDING' && 
+    Math.round(p.entry_price * 100) === price
+  )
 }
 
-// 🎯 ИСПРАВЛЕННАЯ ЦЕНТРОВКА (Ищет математическую середину ликвидности)
-const scrollToSpread = () => {
-  setTimeout(() => {
-    const container = document.getElementById('ladder-container')
-    if (!container) return
-    
-    let bAsk = bestAsk.value > 0 ? bestAsk.value : 50;
-    let bBid = bestBid.value > 0 ? bestBid.value : 50;
-    
-    let midPrice = Math.round((bAsk + bBid) / 2);
-    if (midPrice === 0) midPrice = 50;
-    
-    let spreadIndex = 99 - midPrice; // Цена 99 это индекс 0. Цена 40 это индекс 59.
+const setTeam = (teamId) => { emit('update:activeTeam', teamId) }
 
+const onRowClick = (side, priceCents) => {
+  emit('placeOrder', side, priceCents)
+}
+
+const scrollToSpread = () => {
+  if (!orderBookContainer.value) return
+  
+  const container = orderBookContainer.value
+  const rows = container.querySelectorAll('.price-row')
+  
+  let targetRow = null
+  for (const row of rows) {
+    const askSize = parseFloat(row.dataset.ask || 0)
+    const bidSize = parseFloat(row.dataset.bid || 0)
+    if (askSize > 0 || bidSize > 0) {
+      targetRow = row
+      break
+    }
+  }
+
+  if (targetRow) {
+    const containerHeight = container.clientHeight
+    const rowTop = targetRow.offsetTop
     container.scrollTo({
-      top: (spreadIndex * 28) - (container.clientHeight / 2),
+      top: rowTop - (containerHeight / 2),
       behavior: 'smooth'
     })
-  }, 50)
+  }
 }
 
-watch(() => props.activeTeam, scrollToSpread)
 defineExpose({ scrollToSpread })
 </script>
