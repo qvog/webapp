@@ -49,7 +49,7 @@ export function useOrderBook() {
     ws.onopen = () => {
       let assets = [tokenYes]; if (tokenNo) assets.push(tokenNo)
       ws.send(JSON.stringify({ assets_ids: assets, type: "market" }))
-      toast.success("⚡ HFT M249 Stream Active", { timeout: 1500 })
+      toast.success("⚡ Success!", { timeout: 1500 })
       
       lastMessageTime = Date.now()
 
