@@ -15,7 +15,7 @@ def safe_parse(val):
     return val if isinstance(val, list) else []
 
 @router.get("/markets")
-async def get_markets(category: str = Query("crypto"), subcategory: str = Query("all")):
+async def get_markets(category: str = Query("most_traded"), subcategory: str = Query("all")):
     url = "https://gamma-api.polymarket.com/events"
     
     headers = {
@@ -23,34 +23,64 @@ async def get_markets(category: str = Query("crypto"), subcategory: str = Query(
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     }
 
-    # 1. Формируем пул тегов. Polymarket требует точных slugs.
     slugs_to_fetch = []
-    sports_slugs = ["dota-2", "basketball", "soccer", "tennis", "mma", "esports", "csgo"]
-    crypto_slugs = ["bitcoin", "ethereum", "crypto", "memecoin"]
-    
-    if category == "sports":
-        if subcategory == "all": slugs_to_fetch = sports_slugs
-        else: slugs_to_fetch = [subcategory.replace(" ", "-").lower()]
+    sub = subcategory.lower()
+
+    # 1. 🎯 ГЛОБАЛЬНЫЙ МАППИНГ ТЕГОВ
+    if category == "most_traded":
+        slugs_to_fetch = [None] 
+        
     elif category == "crypto":
-        if subcategory == "all": slugs_to_fetch = crypto_slugs
-        else: slugs_to_fetch = [subcategory.lower()]
-    elif category == "live":
-        slugs_to_fetch = sports_slugs # Для LIVE сканируем весь спорт
+        # Таймфреймы на полимаркете часто используют тег prices или прямые слаги
+        crypto_map = {
+            "5 min": "5-min", "15 min": "15-min", "hourly": "hourly", 
+            "4 hour": "4-hour", "daily": "daily", "weekly": "weekly", 
+            "monthly": "monthly", "pre-market": "pre-market", "etf": "etf"
+        }
+        if sub == "all": slugs_to_fetch = ["crypto", "bitcoin", "ethereum", "solana", "prices"]
+        else: slugs_to_fetch = [crypto_map.get(sub, sub.replace(" ", "-"))]
+            
+    elif category == "sports":
+        sports_map = {
+            "ucl": "soccer", "footbal": "soccer", "football": "soccer",
+            "basketbal": "basketball", "formula 1": "f1"
+        }
+        if sub in ["all", "live", "starting soon"]: 
+            slugs_to_fetch = ["sports", "soccer", "basketball", "tennis", "mma", "nfl", "baseball"]
+        else: 
+            slugs_to_fetch = [sports_map.get(sub, sub.replace(" ", "-"))]
+            
+    elif category == "esports":
+        # 🎯 ИСПРАВЛЕН ТЕГ CS2 (Был csgo, стал cs2)
+        esports_map = {
+            "league of legend": "league-of-legends", "cs2": "cs2", 
+            "rainbow six siege": "rainbow-six", "starcraft ii": "starcraft-2", 
+            "mobile legends: bang bang": "mobile-legends", "honor of kings": "honor-of-kings", 
+            "call of duty": "call-of-duty"
+        }
+        if sub in ["all", "starting soon", "live"]: 
+            slugs_to_fetch = ["esports", "dota-2", "cs2", "valorant", "league-of-legends"]
+        else: 
+            slugs_to_fetch = [esports_map.get(sub, sub.replace(" ", "-"))]
+            
+    elif category == "others":
+        if sub == "all": slugs_to_fetch = ["politics", "pop-culture", "business", "science"]
+        else: slugs_to_fetch = [sub.replace(" ", "-")]
 
     raw_data = []
     
-    # 2. Асинхронно скачиваем топ-ликвидность по нужным категориям
+    # 2. Асинхронное скачивание
     async with httpx.AsyncClient() as client:
         tasks = []
         for slug in slugs_to_fetch:
             params = {
                 "active": "true",
                 "closed": "false",
-                "limit": 100,
-                "tag_slug": slug,
-                "order": "volume_24hr", # Берем только то, что активно торгуется
+                "limit": 50 if category == "most_traded" else 100,
+                "order": "volume_24hr",
                 "ascending": "false"
             }
+            if slug: params["tag_slug"] = slug
             tasks.append(client.get(url, params=params, headers=headers, timeout=15.0))
         
         try:
@@ -68,35 +98,13 @@ async def get_markets(category: str = Query("crypto"), subcategory: str = Query(
     
     for ev in raw_data:
         ev_id = ev.get('id')
-        if ev_id in seen_ids:
-            continue
+        if ev_id in seen_ids: continue
         seen_ids.add(ev_id)
 
-        # 3. 🎯 ФАКТИЧЕСКАЯ ДАТА МАТЧА (Используем endDate, а не дату создания)
         target_date_str = ev.get('endDate') or ev.get('resolutionDate') or ev.get('startDate')
-        
-        tags_lower = []
-        for t in ev.get('tags', []):
-            if isinstance(t, dict): tags_lower.append(t.get('label', '').lower())
-            elif isinstance(t, str): tags_lower.append(t.lower())
+        tags_lower = [t.get('label', '').lower() if isinstance(t, dict) else t.lower() for t in ev.get('tags', [])]
 
-        # 4. 🎯 СТРОГАЯ ФИЛЬТРАЦИЯ (Защита от грязных API Полимаркета)
-        # Если мы в Dota 2, а Полимаркет прислал Теннис - убиваем этот матч
-        if subcategory != "all" and category != "live":
-            search_kw = subcategory.lower()
-            title_lower = ev.get('title', '').lower()
-            has_match = search_kw in title_lower
-            if not has_match:
-                for t in tags_lower:
-                    if search_kw in t or t in search_kw:
-                        has_match = True
-            if not has_match:
-                continue # Полная очистка мусора
-
-        # 5. 🎯 УМНЫЙ СТАТУС LIVE
-        is_live = False
-        if 'live' in tags_lower:
-            is_live = True
+        is_live = 'live' in tags_lower
 
         if target_date_str:
             try:
@@ -104,39 +112,27 @@ async def get_markets(category: str = Query("crypto"), subcategory: str = Query(
                 target_time = target_time.replace(tzinfo=timezone.utc)
                 diff_seconds = (now - target_time).total_seconds()
                 
-                # Если матч фактически начался (в пределах от -2 часов до +4 часов от текущего момента)
-                if -7200 <= diff_seconds <= 14400 and category in ["sports", "live"]:
+                if -7200 <= diff_seconds <= 14400 and category in ["sports", "esports"]:
                     is_live = True
                     
-                # Убираем старье: если фактическая дата матча прошла более 7 дней назад
-                if diff_seconds > 7 * 86400:
+                if diff_seconds > 7 * 86400 and category in ["sports", "esports"]:
                     continue
             except:
                 pass
-        
-        # Если открыта вкладка LIVE - отсекаем всё, что не идет прямо сейчас
-        if category == "live" and not is_live:
-            continue
 
         sub_markets = []
         for m in ev.get('markets', []):
-            if str(m.get('closed', 'false')).lower() == 'true':
-                continue
+            if str(m.get('closed', 'false')).lower() == 'true': continue
             
             outcomes = safe_parse(m.get('outcomes', []))
             prices = safe_parse(m.get('outcomePrices', []))
             token_ids = safe_parse(m.get('clobTokenIds', []))
 
             if len(outcomes) >= 2 and len(token_ids) >= 2:
-                try:
-                    p_yes = float(prices[0]) if len(prices) > 0 else 0.5
-                    p_no = float(prices[1]) if len(prices) > 1 else 0.5
-                except:
-                    p_yes, p_no = 0.5, 0.5
+                try: p_yes, p_no = float(prices[0]) if len(prices) > 0 else 0.5, float(prices[1]) if len(prices) > 1 else 0.5
+                except: p_yes, p_no = 0.5, 0.5
 
-                # 6. 🎯 УБИРАЕМ "МЕРТВЫЕ" ИСХОДЫ (Где матч уже 100% сыгран и нет волатильности)
-                if p_yes >= 0.99 or p_yes <= 0.01:
-                    continue
+                if p_yes >= 0.99 or p_yes <= 0.01: continue
 
                 sub_markets.append({
                     "condition_id": str(m.get('conditionId', '')),
@@ -149,11 +145,9 @@ async def get_markets(category: str = Query("crypto"), subcategory: str = Query(
                     "price_no": p_no
                 })
 
-        if not sub_markets:
-            continue
+        if not sub_markets: continue
 
-        raw_volume = ev.get('volume_24hr') or ev.get('volumeNum') or ev.get('volume') or 0
-        try: total_volume = float(raw_volume)
+        try: total_volume = float(ev.get('volume_24hr') or ev.get('volumeNum') or ev.get('volume') or 0)
         except: total_volume = 0.0
 
         events.append({
@@ -161,10 +155,10 @@ async def get_markets(category: str = Query("crypto"), subcategory: str = Query(
             "title": ev.get('title'),
             "image": ev.get('image'),
             "total_volume": total_volume,
-            "start_date": target_date_str, # Отправляем фактическую дату на фронтенд!
+            "start_date": target_date_str,
             "is_live": is_live,
             "sub_markets": sub_markets
         })
         
     events.sort(key=lambda x: x["total_volume"], reverse=True)
-    return events[:100]
+    return events[:50] if category == "most_traded" else events[:100]
