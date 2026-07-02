@@ -16,34 +16,57 @@ export const useMarketStore = defineStore('market', {
     
     favorites: JSON.parse(localStorage.getItem('qscalp_fav_v2') || '[]'),
     isSidebarExpanded: false,
-    sortBy: 'volume' 
+    sortBy: 'volume',
+    
+    // 🎯 ЗАЩИТА ОТ RACE CONDITION
+    _fetchId: 0
   }),
   
   getters: {
     filteredMatches(state) {
-      let result = []
-      
-      if (state.activeCategory === 'favorites') {
-        result = [...state.favorites]
-      } else {
-        result = [...state.matches]
-        if (state.activeCategory === 'live') {
-          result = result.filter(m => m.is_live)
+      let result = state.activeCategory === 'favorites' ? [...state.favorites] : [...state.matches];
+
+      // 🎯 БРОНЕБОЙНАЯ СОРТИРОВКА
+      result.sort((a, b) => {
+        if (state.sortBy === 'date') {
+          const now = Date.now();
+          const tA = new Date(a.start_date).getTime() || 0;
+          const tB = new Date(b.start_date).getTime() || 0;
+          
+          // 1. LIVE матчи абсолютно всегда наверху
+          if (a.is_live && !b.is_live) return -1;
+          if (!a.is_live && b.is_live) return 1;
+
+          // 2. Если у обоих есть даты, вычисляем дистанцию до текущего момента
+          if (tA && tB) {
+              const diffA = tA - now;
+              const diffB = tB - now;
+
+              const isFutureA = diffA > 0;
+              const isFutureB = diffB > 0;
+
+              if (isFutureA && isFutureB) {
+                // Оба в будущем: Ближайший матч (меньшая разница) выше
+                const res = diffA - diffB;
+                if (res !== 0) return res;
+              } else if (!isFutureA && !isFutureB) {
+                // Оба в прошлом: Самый свежий матч (ближе к нулю) выше
+                const res = diffB - diffA;
+                if (res !== 0) return res;
+              } else if (isFutureA && !isFutureB) {
+                // Будущее всегда выше прошлого
+                return -1;
+              } else if (!isFutureA && isFutureB) {
+                return 1;
+              }
+          }
         }
-      }
+        
+        // 3. Fallback (Дефолт): Сортируем по деньгам (объему)
+        return b.total_volume - a.total_volume;
+      });
 
-      // 🎯 ПРАВИЛЬНАЯ СОРТИРОВКА (d2 - d1 выводит ближайшие/новые сверху)
-      if (state.sortBy === 'volume') {
-        result.sort((a, b) => b.total_volume - a.total_volume)
-      } else if (state.sortBy === 'date') {
-        result.sort((a, b) => {
-          const d1 = new Date(a.start_date).getTime() || 0
-          const d2 = new Date(b.start_date).getTime() || 0
-          return d2 - d1 
-        })
-      }
-
-      return result
+      return result;
     }
   },
 
@@ -51,18 +74,30 @@ export const useMarketStore = defineStore('market', {
     async loadMatches() {
       if (this.activeCategory === 'favorites') return
 
-      const fetchCategory = this.activeCategory === 'live' ? 'sports' : this.activeCategory
+      const fetchCategory = this.activeCategory 
       const fetchSub = this.activeSubcategory
+      
+      // Маркируем этот запрос, чтобы убить Race Condition
+      const currentId = ++this._fetchId; 
 
       this.isLoadingMarkets = true
       try {
         const res = await fetch(`http://127.0.0.1:8000/api/markets?category=${fetchCategory}&subcategory=${fetchSub}`)
-        this.matches = await res.json() || []
+        const data = await res.json()
+        
+        // 🎯 Обновляем список ТОЛЬКО если пользователь не переключил вкладку в процессе загрузки
+        if (this._fetchId === currentId) {
+            this.matches = data || []
+        }
       } catch (e) {
         console.error("Fetch markets error:", e)
-        this.matches = []
+        if (this._fetchId === currentId) {
+            this.matches = []
+        }
       } finally {
-        this.isLoadingMarkets = false
+        if (this._fetchId === currentId) {
+            this.isLoadingMarkets = false
+        }
       }
     },
     
