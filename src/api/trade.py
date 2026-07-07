@@ -27,20 +27,14 @@ class TradeRequest(BaseModel):
     stop_loss_price: Optional[float] = None
     strategy: str = "custom"
 
-class PanicRequest(BaseModel):
-    order_id: str
-
 @router.post("/order")
 async def place_order(req: TradeRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
-    
-    # 🎯 ГАРАНТИЯ ПРОКСИ: Принудительно выставляем прокси перед запросом
     if os.getenv("POLY_PROXY"):
         os.environ["HTTP_PROXY"] = os.getenv("POLY_PROXY")
         os.environ["HTTPS_PROXY"] = os.getenv("POLY_PROXY")
 
     safe_price = round(float(req.price), 2)
     side_const = BUY if req.side.upper() == "BUY" else SELL
-    
     strategy = req.strategy 
     
     if req.bankroll < 5.00:
@@ -52,7 +46,6 @@ async def place_order(req: TradeRequest, background_tasks: BackgroundTasks, db: 
     
     try:
         client = get_clob_client()
-        
         builder_code = os.getenv("BUILDER_CODE", "0x0000000000000000000000000000000000000000000000000000000000000000")
         
         is_neg_risk = await run_sync(client.get_neg_risk, str(req.token_id))
@@ -61,16 +54,12 @@ async def place_order(req: TradeRequest, background_tasks: BackgroundTasks, db: 
         main_args = OrderArgs(price=safe_price, size=safe_size, side=side_const, token_id=str(req.token_id), builder_code=builder_code)
         resp = await run_sync(client.create_and_post_order, order_args=main_args, options=options, order_type=OrderType.GTC)
         
-        if resp and resp.get("success"):
-            main_order_id = resp.get('orderID')
+        main_order_id = resp.get("orderID") or resp.get("id") if isinstance(resp, dict) else None
+        
+        if main_order_id:
             safe_tp_price = round(float(req.take_profit_price), 2) if req.take_profit_price else None
-            
-            if req.stop_loss_price is not None:
-                sl_price = round(float(req.stop_loss_price), 2)
-            else:
-                sl_price = max(0.01, safe_price - 0.12)
+            sl_price = round(float(req.stop_loss_price), 2) if req.stop_loss_price is not None else max(0.01, safe_price - 0.12)
 
-            db = SessionLocal()
             try:
                 new_pos = Position(
                     order_id=main_order_id, 
@@ -81,14 +70,13 @@ async def place_order(req: TradeRequest, background_tasks: BackgroundTasks, db: 
                     size=safe_size, 
                     tp_price=safe_tp_price,
                     sl_trigger_price=sl_price, 
-                    status="PENDING"
+                    status="PENDING" if req.is_custom_limit else "OPEN"
                 )
                 db.add(new_pos)
                 db.commit()
             except Exception as e:
                 db.rollback()
                 print(f"⚠️ Ошибка БД: {e}")
-            finally: db.close()
             
             background_tasks.add_task(
                 monitor_and_manage_position, order_id=main_order_id, entry_price=safe_price,
@@ -97,22 +85,22 @@ async def place_order(req: TradeRequest, background_tasks: BackgroundTasks, db: 
             )
             return {"success": True, "order_id": main_order_id}
         else:
-            return {"success": False, "error": str(resp)}
+            err_msg = resp.get("errorMsg", str(resp)) if isinstance(resp, dict) else str(resp)
+            return {"success": False, "error": err_msg}
             
     except Exception as e:
         return {"success": False, "error": str(e)}
 
-@router.post("/panic_sell")
-async def panic_sell_position(req: PanicRequest):
-    
-    # 🎯 ГАРАНТИЯ ПРОКСИ
+# 🎯 ФИКС: Сделали чтение {order_id} прямо из URL, как просит твой фронтенд!
+@router.post("/panic_sell/{order_id}")
+async def panic_sell_position(order_id: str, db: Session = Depends(get_db)):
     if os.getenv("POLY_PROXY"):
         os.environ["HTTP_PROXY"] = os.getenv("POLY_PROXY")
         os.environ["HTTPS_PROXY"] = os.getenv("POLY_PROXY")
 
-    db = SessionLocal()
     try:
-        pos = db.query(Position).filter(Position.order_id == req.order_id).first()
+        # Ищем ордер по order_id из URL
+        pos = db.query(Position).filter(Position.order_id == order_id).first()
         if not pos:
             return {"success": False, "error": "Позиция не найдена в базе данных"}
 
@@ -123,7 +111,7 @@ async def panic_sell_position(req: PanicRequest):
         builder_code = os.getenv("BUILDER_CODE", "0x0000000000000000000000000000000000000000000000000000000000000000")
 
         try:
-            order_info = await run_sync(client.get_order, req.order_id)
+            order_info = await run_sync(client.get_order, order_id)
             order_data = order_info[0] if isinstance(order_info, list) and len(order_info) > 0 else order_info
             
             if order_data and isinstance(order_data, dict):
@@ -131,7 +119,7 @@ async def panic_sell_position(req: PanicRequest):
                 status = order_data.get('status')
                 
                 if matched == 0 and status in ['LIVE', 'OPEN']:
-                    await run_sync(client.cancel_orders, [req.order_id])
+                    await run_sync(client.cancel_orders, [order_id])
                     pos.status = "CANCELED"
                     db.commit()
                     return {"success": True, "message": "Отменено (покупок не было)."}
@@ -140,7 +128,6 @@ async def panic_sell_position(req: PanicRequest):
         except Exception as e:
             err_msg = str(e).lower()
             if "invalid token id" in err_msg or "400" in err_msg:
-                print(f"🧹 [СБРОС] Токен {token_id} больше не существует на бирже. Принудительная очистка.")
                 pos.status = "RESOLVED"
                 pos.exit_price = 1.0
                 db.commit()
@@ -159,7 +146,7 @@ async def panic_sell_position(req: PanicRequest):
             sell_args = OrderArgs(price=0.01, size=size_to_sell, side=SELL, token_id=str(token_id), builder_code=builder_code)
             resp = await run_sync(client.create_and_post_order, order_args=sell_args, options=options, order_type=OrderType.GTC)
             
-            if resp and resp.get("success"):
+            if resp and (isinstance(resp, dict) and (resp.get("orderID") or resp.get("id"))):
                 try:
                     ob = await run_sync(client.get_order_book, str(token_id))
                     bids = ob.get("bids", [])
@@ -182,20 +169,16 @@ async def panic_sell_position(req: PanicRequest):
         except Exception as e:
             error_msg = str(e).lower()
             if "invalid token id" in error_msg or "invalid_token" in error_msg:
-                print(f"🧹 [СБРОС] Перехвачена ошибка клиринга токена. Закрываем сделку.")
                 pos.status = "RESOLVED"
                 pos.exit_price = 1.0 
                 db.commit()
                 return {"success": True, "message": "Очищено (продано вручную)."}
-            
             return {"success": False, "error": f"Ошибка Polymarket: {str(e)}"}
             
         return {"success": False, "error": "Неизвестная ошибка при отправке ордера"}
             
     except Exception as e:
         return {"success": False, "error": f"Внутренняя ошибка сервера: {str(e)}"}
-    finally:
-        db.close()
 
 @router.get("/positions")
 async def get_open_positions(db: Session = Depends(get_db)):
