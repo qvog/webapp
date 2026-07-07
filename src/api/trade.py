@@ -1,4 +1,5 @@
-from fastapi import APIRouter, BackgroundTasks
+from fastapi import APIRouter, Depends, BackgroundTasks
+from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional
 import asyncio
@@ -9,28 +10,34 @@ from py_clob_client_v2.order_builder.constants import BUY, SELL
 
 from src.api.client import get_clob_client, run_sync
 from src.workers.monitor import monitor_and_manage_position
-from src.database.db import SessionLocal
+from src.database.db import get_db
 from src.database.models import Position
 
 router = APIRouter()
 
 class TradeRequest(BaseModel):
     token_id: str
+    condition_id: str
     price: float
     side: str
     bankroll: float
-    risk_percent: float
+    risk_percent: float = 100
+    is_custom_limit: bool = False
     take_profit_price: Optional[float] = None
     stop_loss_price: Optional[float] = None
     strategy: str = "custom"
-    is_custom_limit: bool = False
-    condition_id: Optional[str] = None
 
 class PanicRequest(BaseModel):
     order_id: str
 
-@router.post("/api/trade")
-async def place_order(req: TradeRequest, background_tasks: BackgroundTasks):
+@router.post("/order")
+async def place_order(req: TradeRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    
+    # 🎯 ГАРАНТИЯ ПРОКСИ: Принудительно выставляем прокси перед запросом
+    if os.getenv("POLY_PROXY"):
+        os.environ["HTTP_PROXY"] = os.getenv("POLY_PROXY")
+        os.environ["HTTPS_PROXY"] = os.getenv("POLY_PROXY")
+
     safe_price = round(float(req.price), 2)
     side_const = BUY if req.side.upper() == "BUY" else SELL
     
@@ -46,13 +53,11 @@ async def place_order(req: TradeRequest, background_tasks: BackgroundTasks):
     try:
         client = get_clob_client()
         
-        # 🎯 ПОДТЯГИВАЕМ BUILDER CODE
         builder_code = os.getenv("BUILDER_CODE", "0x0000000000000000000000000000000000000000000000000000000000000000")
         
         is_neg_risk = await run_sync(client.get_neg_risk, str(req.token_id))
         options = PartialCreateOrderOptions(tick_size="0.01", neg_risk=is_neg_risk)
 
-        # 🎯 ВСТАВЛЯЕМ BUILDER CODE В АРГУМЕНТЫ
         main_args = OrderArgs(price=safe_price, size=safe_size, side=side_const, token_id=str(req.token_id), builder_code=builder_code)
         resp = await run_sync(client.create_and_post_order, order_args=main_args, options=options, order_type=OrderType.GTC)
         
@@ -63,9 +68,7 @@ async def place_order(req: TradeRequest, background_tasks: BackgroundTasks):
             if req.stop_loss_price is not None:
                 sl_price = round(float(req.stop_loss_price), 2)
             else:
-                sl_price = safe_price - 0.12
-            
-            sl_price = max(0.01, round(sl_price, 2))
+                sl_price = max(0.01, safe_price - 0.12)
 
             db = SessionLocal()
             try:
@@ -99,8 +102,14 @@ async def place_order(req: TradeRequest, background_tasks: BackgroundTasks):
     except Exception as e:
         return {"success": False, "error": str(e)}
 
-@router.post("/api/panic_sell")
+@router.post("/panic_sell")
 async def panic_sell_position(req: PanicRequest):
+    
+    # 🎯 ГАРАНТИЯ ПРОКСИ
+    if os.getenv("POLY_PROXY"):
+        os.environ["HTTP_PROXY"] = os.getenv("POLY_PROXY")
+        os.environ["HTTPS_PROXY"] = os.getenv("POLY_PROXY")
+
     db = SessionLocal()
     try:
         pos = db.query(Position).filter(Position.order_id == req.order_id).first()
@@ -111,7 +120,6 @@ async def panic_sell_position(req: PanicRequest):
         token_id = pos.token_id
         size_to_sell = pos.size
         
-        # 🎯 ПОДТЯГИВАЕМ BUILDER CODE ДЛЯ ПАНИК СЕЛЛА
         builder_code = os.getenv("BUILDER_CODE", "0x0000000000000000000000000000000000000000000000000000000000000000")
 
         try:
@@ -148,7 +156,6 @@ async def panic_sell_position(req: PanicRequest):
         try:
             is_neg_risk = await run_sync(client.get_neg_risk, str(token_id))
             options = PartialCreateOrderOptions(tick_size="0.01", neg_risk=is_neg_risk)
-            # 🎯 ВСТАВЛЯЕМ BUILDER CODE
             sell_args = OrderArgs(price=0.01, size=size_to_sell, side=SELL, token_id=str(token_id), builder_code=builder_code)
             resp = await run_sync(client.create_and_post_order, order_args=sell_args, options=options, order_type=OrderType.GTC)
             
@@ -190,9 +197,8 @@ async def panic_sell_position(req: PanicRequest):
     finally:
         db.close()
 
-@router.get("/api/positions")
-async def get_open_positions():
-    db = SessionLocal()
+@router.get("/positions")
+async def get_open_positions(db: Session = Depends(get_db)):
     try:
         positions = db.query(Position).filter(Position.status.in_(["OPEN", "PENDING"])).all()
         
@@ -212,5 +218,3 @@ async def get_open_positions():
         return {"success": True, "positions": pos_list}
     except Exception as e:
         return {"success": False, "error": str(e)}
-    finally:
-        db.close()
