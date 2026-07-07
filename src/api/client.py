@@ -1,5 +1,7 @@
 import os
 import logging
+import asyncio
+from functools import partial
 from dotenv import load_dotenv
 
 # 🎯 Убрали проблемный импорт SignatureType!
@@ -14,6 +16,10 @@ logger = logging.getLogger(__name__)
 
 # Принудительно грузим .env из корня проекта
 load_dotenv()
+
+async def run_sync(func, *args, **kwargs):
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, partial(func, *args, **kwargs))
 
 def get_clob_client():
     host = os.getenv("POLY_HOST", "https://clob.polymarket.com")
@@ -47,9 +53,7 @@ def get_clob_client():
             api_passphrase=api_passphrase,
         )
 
-    # 🎯 4. БРОНЕБОЙНАЯ ИНИЦИАЛИЗАЦИЯ
-    # Передаем signature_type=3 (POLY_1271 / Deposit Wallet Flow) как обычную цифру.
-    # Это решает и проблему импорта, и проблему "maker address not allowed".
+    # 4. БРОНЕБОЙНАЯ ИНИЦИАЛИЗАЦИЯ
     client = ClobClient(
         host, 
         key=pk, 
