@@ -25,7 +25,6 @@ export const useMarketStore = defineStore('market', {
     filteredMatches(state) {
       let result = state.activeCategory === 'favorites' ? [...state.favorites] : [...state.matches];
 
-      // 🎯 ФРОНТЕНД ФИЛЬТРАЦИЯ (LIVE и STARTING SOON)
       if (['sports', 'esports'].includes(state.activeCategory)) {
         if (state.activeSubcategory === 'live') {
           result = result.filter(m => m.is_live);
@@ -74,7 +73,8 @@ export const useMarketStore = defineStore('market', {
 
       this.isLoadingMarkets = true
       try {
-        const res = await fetch(`http://127.0.0.1:8000/api/markets?category=${fetchCategory}&subcategory=${fetchSub}`)
+        // 🎯 ИСПРАВЛЕНО: Используем относительный путь для работы через Vite Proxy
+        const res = await fetch(`/api/markets?category=${fetchCategory}&subcategory=${fetchSub}`)
         const data = await res.json()
         
         if (this._fetchId === currentId) {
@@ -109,7 +109,8 @@ export const useMarketStore = defineStore('market', {
 
     async loadPositions() {
       try {
-        const res = await fetch('http://127.0.0.1:8000/api/positions')
+        // 🎯 ИСПРАВЛЕНО: Относительный путь
+        const res = await fetch('/api/positions')
         const data = await res.json()
         if (data && data.success) this.openPositions = data.positions || []
       } catch (e) {}

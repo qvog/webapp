@@ -519,7 +519,8 @@ const handlePlaceOrder = async (side, priceCents) => {
   
   try {
     toast.info(`Transmitting order...`)
-    const res = await fetch('http://127.0.0.1:8000/api/order', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(reqBody) })
+    // 🎯 ИСПРАВЛЕНО: Относительный путь
+    const res = await fetch('/api/order', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(reqBody) })
     const data = await res.json()
     if (data.success) { toast.success(`✅ FILLED ${priceCents}¢`); marketStore.loadPositions() } 
     else toast.error(`❌ REJECTED: ${data.error}`)
@@ -529,7 +530,8 @@ const handlePlaceOrder = async (side, priceCents) => {
 const executePanicSell = async (orderId) => {
   try {
     toast.warning("⚡ Market Dump Initiation...")
-    const res = await fetch(`http://127.0.0.1:8000/api/panic_sell/${orderId}`, { method: 'POST' })
+    // 🎯 ИСПРАВЛЕНО: Относительный путь
+    const res = await fetch(`/api/panic_sell/${orderId}`, { method: 'POST' })
     const data = await res.json()
     if (data.success) { toast.success(`✅ ${data.message}`); marketStore.loadPositions() } 
     else toast.error(`❌ ERROR: ${data.error}`)
