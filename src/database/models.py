@@ -12,6 +12,8 @@ class Position(Base):
     token_id = Column(String, index=True, nullable=False)
     condition_id = Column(String, nullable=True)
     strategy = Column(String, nullable=False) # '4c', '8c', 'match'
+
+    side = Column(String)
     
     entry_price = Column(Float, nullable=False)
     exit_price = Column(Float, nullable=True)

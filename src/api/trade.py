@@ -50,7 +50,6 @@ async def get_positions(db: Session = Depends(get_db)):
         Position.status.in_(['OPEN', 'PENDING'])
     ).all()
     
-    # 🎯 ЖЕЛЕЗОБЕТОННЫЙ ФИКС: Ручная упаковка данных, чтобы не отдавать внутренности БД
     result = []
     for p in positions:
         result.append({
@@ -80,13 +79,14 @@ async def panic_sell(order_id: str, db: Session = Depends(get_db)):
             db.commit()
             return {"success": True, "message": "Order canceled"}
         else:
-            pos.status = 'CANCELED'
-            db.commit()
-            return {"success": True, "message": "Forced cancel (Not found)"}
+            return {"success": False, "error": "Не удалось отменить ордер на бирже"}
             
     elif pos.status == 'OPEN':
         try:
-            resp = trade_worker.place_order(token_id=pos.token_id, price=0.01, size=pos.size, side="SELL")
+            # 🎯 Умный реверс: если покупали YES, продаем YES
+            close_side = "SELL" if pos.side.upper() == "BUY" else "BUY"
+            
+            resp = trade_worker.place_order(token_id=pos.token_id, price=0.01, size=pos.size, side=close_side)
             if resp and resp.get('success'):
                 pos.status = 'CLOSED_SL'
                 pos.exit_price = 0.01
@@ -94,6 +94,7 @@ async def panic_sell(order_id: str, db: Session = Depends(get_db)):
                 return {"success": True, "message": "Market Dump Executed"}
             else:
                 err_msg = resp.get('error', '').lower()
+                # Если позиция уже была закрыта или продана
                 if "not enough balance" in err_msg or "balance: 0" in err_msg:
                     pos.status = 'CLOSED_EXTERNAL'
                     db.commit()
