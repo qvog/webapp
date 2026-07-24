@@ -3,7 +3,7 @@ import asyncio
 import json
 import websockets
 import os
-import re
+import re 
 from datetime import datetime
 from py_clob_client_v2 import OrderArgs, OrderType
 from py_clob_client_v2.order_builder.constants import SELL
@@ -17,8 +17,6 @@ POLY_WS_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 async def monitor_and_manage_position(order_id: str, entry_price: float, tp_price: float, sl_price: float, original_size: float, token_id: str, options, strategy: str):
     print(f"👀 [Воркер] Наблюдаю за входом {order_id} (Стратегия: {strategy.upper()})...")
     client = get_clob_client()
-    
-    # 🎯 ПОДТЯГИВАЕМ BUILDER CODE ДЛЯ НОВЫХ ОРДЕРОВ
     builder_code = os.getenv("BUILDER_CODE", "0x0000000000000000000000000000000000000000000000000000000000000000")
     
     actual_size = 0
@@ -86,7 +84,6 @@ async def monitor_and_manage_position(order_id: str, entry_price: float, tp_pric
     if tp_price:
         for _ in range(10):
             try:
-                # 🎯 ДОБАВЛЕН BUILDER_CODE
                 tp_args = OrderArgs(price=tp_price, size=actual_size, side=SELL, token_id=token_id, builder_code=builder_code)
                 tp_resp = await run_sync(client.create_and_post_order, order_args=tp_args, options=options, order_type=OrderType.GTC)
                 if tp_resp and tp_resp.get("success"):
@@ -233,9 +230,24 @@ async def monitor_and_manage_position(order_id: str, entry_price: float, tp_pric
                                 continue 
                                 
                             print(f"🚨 [Воркер] СТОП-ЛОСС ПРОБИТ! Цена: {best_bid}$")
+                            
+                            # 🎯 ФИКС: Безопасная отмена ТП через синхронную обертку
                             if tp_order_id:
-                                try: await run_sync(client.cancel_orders, [tp_order_id])
-                                except: pass
+                                def sync_cancel_tp():
+                                    class OrderProxy:
+                                        def __init__(self, _id):
+                                            self.orderID, self.id = _id, _id
+                                    if hasattr(client, "cancel"):
+                                        try: client.cancel(tp_order_id)
+                                        except AttributeError:
+                                            try: client.cancel(OrderProxy(tp_order_id))
+                                            except: pass
+                                    elif hasattr(client, "cancel_order"):
+                                        try: client.cancel_order(tp_order_id)
+                                        except AttributeError:
+                                            try: client.cancel_order(OrderProxy(tp_order_id))
+                                            except: pass
+                                await run_sync(sync_cancel_tp)
                             
                             shares_to_sell = round(actual_size * sell_ratio, 2)
                             
@@ -243,17 +255,14 @@ async def monitor_and_manage_position(order_id: str, entry_price: float, tp_pric
                                 current_size = t_size
                                 for _ in range(2): 
                                     try:
-                                        # 🎯 ДОБАВЛЕН BUILDER_CODE
                                         s_args = OrderArgs(price=0.01, size=current_size, side=SELL, token_id=token_id, builder_code=builder_code)
                                         resp = await run_sync(client.create_and_post_order, order_args=s_args, options=options, order_type=OrderType.GTC)
-                                        
                                         if resp and isinstance(resp, dict) and resp.get("error"):
                                             err = resp.get("error")
                                             if "balance" in err:
                                                 m = re.search(r"balance:\s*(\d+)", err)
                                                 if m:
                                                     current_size = int(int(m.group(1)) / 1000000.0 * 100) / 100.0
-                                                    print(f"🔄 [Воркер] Авто-коррекция объема: продаем {current_size} акций")
                                                     if current_size <= 0: return None
                                                     continue 
                                         return resp
@@ -263,7 +272,6 @@ async def monitor_and_manage_position(order_id: str, entry_price: float, tp_pric
                                             m = re.search(r"balance:\s*(\d+)", err)
                                             if m:
                                                 current_size = int(int(m.group(1)) / 1000000.0 * 100) / 100.0
-                                                print(f"🔄 [Воркер] Авто-коррекция объема (Exc): продаем {current_size} акций")
                                                 if current_size <= 0: return None
                                                 continue
                                         return None
@@ -271,7 +279,7 @@ async def monitor_and_manage_position(order_id: str, entry_price: float, tp_pric
 
                             sl_resp = await safe_market_sell(shares_to_sell)
                             
-                            if sl_resp and (isinstance(sl_resp, dict) and sl_resp.get("success")):
+                            if sl_resp and (isinstance(sl_resp, dict) and (sl_resp.get("success") or sl_resp.get("orderID") or sl_resp.get("id"))):
                                 print(f"✅ [Воркер] Позиция ликвидирована.")
                                 db = SessionLocal()
                                 try:

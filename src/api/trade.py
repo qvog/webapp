@@ -29,10 +29,6 @@ class TradeRequest(BaseModel):
 
 @router.post("/order")
 async def place_order(req: TradeRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
-    if os.getenv("POLY_PROXY"):
-        os.environ["HTTP_PROXY"] = os.getenv("POLY_PROXY")
-        os.environ["HTTPS_PROXY"] = os.getenv("POLY_PROXY")
-
     safe_price = round(float(req.price), 2)
     side_const = BUY if req.side.upper() == "BUY" else SELL
     strategy = req.strategy 
@@ -91,15 +87,9 @@ async def place_order(req: TradeRequest, background_tasks: BackgroundTasks, db: 
     except Exception as e:
         return {"success": False, "error": str(e)}
 
-# 🎯 ФИКС: Сделали чтение {order_id} прямо из URL, как просит твой фронтенд!
 @router.post("/panic_sell/{order_id}")
 async def panic_sell_position(order_id: str, db: Session = Depends(get_db)):
-    if os.getenv("POLY_PROXY"):
-        os.environ["HTTP_PROXY"] = os.getenv("POLY_PROXY")
-        os.environ["HTTPS_PROXY"] = os.getenv("POLY_PROXY")
-
     try:
-        # Ищем ордер по order_id из URL
         pos = db.query(Position).filter(Position.order_id == order_id).first()
         if not pos:
             return {"success": False, "error": "Позиция не найдена в базе данных"}
@@ -110,6 +100,23 @@ async def panic_sell_position(order_id: str, db: Session = Depends(get_db)):
         
         builder_code = os.getenv("BUILDER_CODE", "0x0000000000000000000000000000000000000000000000000000000000000000")
 
+        # 🎯 Единая функция безопасной отмены для V2
+        def safe_cancel(oid):
+            class OrderProxy:
+                def __init__(self, _id):
+                    self.orderID, self.id = _id, _id
+            if hasattr(client, "cancel"):
+                try: client.cancel(oid); return True
+                except AttributeError:
+                    try: client.cancel(OrderProxy(oid)); return True
+                    except: pass
+            if hasattr(client, "cancel_order"):
+                try: client.cancel_order(oid); return True
+                except AttributeError:
+                    try: client.cancel_order(OrderProxy(oid)); return True
+                    except: pass
+            return False
+
         try:
             order_info = await run_sync(client.get_order, order_id)
             order_data = order_info[0] if isinstance(order_info, list) and len(order_info) > 0 else order_info
@@ -119,7 +126,8 @@ async def panic_sell_position(order_id: str, db: Session = Depends(get_db)):
                 status = order_data.get('status')
                 
                 if matched == 0 and status in ['LIVE', 'OPEN']:
-                    await run_sync(client.cancel_orders, [order_id])
+                    # 🎯 ФИКС: Используем safe_cancel вместо сломанного cancel_orders
+                    await run_sync(safe_cancel, order_id)
                     pos.status = "CANCELED"
                     db.commit()
                     return {"success": True, "message": "Отменено (покупок не было)."}
@@ -134,9 +142,7 @@ async def panic_sell_position(order_id: str, db: Session = Depends(get_db)):
                 return {"success": True, "message": "Очищено (токен сгорел/рынок закрыт)."}
 
         try: await run_sync(client.cancel_market_orders, asset_id=str(token_id))
-        except: 
-            try: await run_sync(client.cancel_all)
-            except: pass
+        except: pass
             
         await asyncio.sleep(1.0) 
         
