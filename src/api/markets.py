@@ -50,7 +50,7 @@ async def fetch_specific_slugs(slugs, limit=100):
     async with httpx.AsyncClient() as client:
         tasks = []
         for slug in slugs:
-            params = {"active": "true", "closed": "false", "limit": limit, "order": "volume_24hr", "ascending": "false"}
+            params = {"active": "true", "closed": "false", "limit": str(limit)}
             if slug: params["tag_slug"] = slug
             tasks.append(client.get(url, params=params, headers=headers, timeout=5.0))
         
@@ -117,6 +117,7 @@ async def background_updater():
 
 # Функция фильтрации (вынесена отдельно, чтобы использовать дважды)
 def filter_events(raw_data, category, subcategory, target_slugs):
+
     sub = subcategory.lower()
     events = []
     now = datetime.now(timezone.utc)
