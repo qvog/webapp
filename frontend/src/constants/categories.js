@@ -67,6 +67,139 @@ export const SUBCATEGORIES = {
   ],
 }
 
+/** Short crypto tabs that rotate live windows like Polymarket. */
+export const CRYPTO_LIVE_WINDOW_SUBS = new Set(['5 min', '15 min', 'hourly', '4 hour'])
+
+const MAIN_NAV = [
+  { category: 'most_traded', subcategory: 'all', label: 'Most Traded', keywords: ['most', 'traded', 'popular'] },
+  { category: 'live', subcategory: 'all', label: 'Live Markets', keywords: ['live'] },
+  { category: 'favorites', subcategory: 'all', label: 'Favorites', keywords: ['favorites', 'fav', 'star'] },
+  { category: 'sports', subcategory: 'all', label: 'Sports', keywords: ['sports', 'sport'] },
+  { category: 'esports', subcategory: 'all', label: 'Esports', keywords: ['esports', 'e-sports', 'gaming'] },
+  { category: 'crypto', subcategory: 'all', label: 'Crypto', keywords: ['crypto', 'cryptocurrency'] },
+  { category: 'others', subcategory: 'all', label: 'Others', keywords: ['others', 'other'] },
+]
+
+/** Extra search aliases for subcategories (query → match). */
+const SUB_KEYWORDS = {
+  cs2: ['cs', 'cs2', 'csgo', 'counter strike', 'counter-strike', 'counterstrike'],
+  'dota 2': ['dota', 'dota2', 'dota 2'],
+  'league of legend': ['lol', 'league', 'league of legends', 'legends'],
+  '5 min': ['5m', '5 min', '5min', 'five min'],
+  '15 min': ['15m', '15 min', '15min'],
+  hourly: ['1h', 'hourly', 'hour', '1 hour'],
+  '4 hour': ['4h', '4 hour', '4hr', 'four hour'],
+  bitcoin: ['btc', 'bitcoin'],
+  ethereum: ['eth', 'ethereum'],
+  solana: ['sol', 'solana'],
+  dogecoin: ['doge', 'dogecoin'],
+  footbal: ['football', 'soccer', 'footbal'],
+  football: ['nfl', 'american football', 'am football'],
+  basketbal: ['nba', 'basketball', 'basketbal'],
+  ucl: ['ucl', 'champions league', 'champions'],
+  valorant: ['valorant', 'val'],
+}
+
+/**
+ * Flatten nav + subcategories for search.
+ * @returns {{ category: string, subcategory: string, label: string, path: string, keywords: string[] }[]}
+ */
+export function getSearchableCategories() {
+  const items = MAIN_NAV.map((m) => ({
+    ...m,
+    path: m.label,
+    keywords: [...m.keywords, m.label.toLowerCase()],
+  }))
+
+  for (const [cat, subs] of Object.entries(SUBCATEGORIES)) {
+    if (!subs?.length) continue
+    for (const sub of subs) {
+      if (sub.id === 'live' || sub.id === 'starting soon' || sub.id === 'all') {
+        // still searchable but with category prefix
+      }
+      const path = `${cat} / ${sub.label}`
+      const kw = [
+        sub.id,
+        sub.label.toLowerCase(),
+        cat,
+        path.toLowerCase(),
+        ...(SUB_KEYWORDS[sub.id] || []),
+      ]
+      items.push({
+        category: cat,
+        subcategory: sub.id,
+        label: sub.label,
+        path,
+        keywords: kw,
+      })
+    }
+  }
+  return items
+}
+
+function _tokens(text) {
+  return String(text || '')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean)
+}
+
+/** Prefix match that does not treat "5" as a hit for "15". */
+function _prefixHit(text, q) {
+  const t = String(text || '').toLowerCase()
+  if (!t || !q) return false
+  if (t === q) return true
+  if (!t.startsWith(q)) return false
+  if (/^\d+$/.test(q) && /^\d+$/.test(t) && t !== q) return false
+  return true
+}
+
+/**
+ * Rank category hits for a query. Categories with better prefix/exact matches first.
+ * Short queries (e.g. "cs") only match keyword/label prefixes — not substrings inside
+ * unrelated words like "politiCS".
+ */
+export function searchCategories(query, limit = 8) {
+  const q = (query || '').trim().toLowerCase()
+  if (!q) return []
+
+  const scored = []
+  for (const item of getSearchableCategories()) {
+    let score = 0
+    const label = item.label.toLowerCase()
+    const sub = String(item.subcategory || '').toLowerCase()
+    const tokens = _tokens(`${item.path} ${item.keywords.join(' ')}`)
+
+    if (label === q || sub === q) score = 100
+    else if (item.keywords.some((k) => k === q)) score = 95
+    else if (_prefixHit(label, q) || _prefixHit(sub, q)) score = 85
+    else if (item.keywords.some((k) => _prefixHit(k, q))) score = 75
+    else if (tokens.some((t) => _prefixHit(t, q))) score = 65
+    else if (q.length >= 3 && item.keywords.some((k) => k.includes(q))) score = 45
+    else if (q.length >= 3 && tokens.some((t) => t.includes(q))) score = 35
+    else continue
+
+    // Prefer specific subcategories over top-level when query is short (e.g. "cs" → CS2)
+    if (item.subcategory && item.subcategory !== 'all') score += 5
+
+    scored.push({ ...item, score })
+  }
+
+  scored.sort((a, b) => b.score - a.score || a.path.localeCompare(b.path))
+
+  // Dedupe by category+subcategory
+  const seen = new Set()
+  const out = []
+  for (const item of scored) {
+    const key = `${item.category}::${item.subcategory}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(item)
+    if (out.length >= limit) break
+  }
+  return out
+}
+
 const S = 'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"'
 
 const ICONS = {
@@ -122,21 +255,58 @@ export function getSubcategoryIcon(id) {
   return `<svg viewBox="0 0 24 24" fill="none" class="w-[18px] h-[18px] ${color}">${svg}</svg>`
 }
 
+/** Display market times in Moscow (UTC+3), 24h — Polymarket timestamps are UTC. */
+const DISPLAY_TZ = 'Europe/Moscow'
+
+function parseMarketDate(dateString) {
+  if (!dateString) return null
+  let s = String(dateString).trim()
+  // "2026-03-10 11:40:00+00" → ISO-friendly
+  if (/^\d{4}-\d{2}-\d{2} /.test(s)) s = s.replace(' ', 'T')
+  if (s.endsWith('+00')) s = s.slice(0, -3) + '+00:00'
+  const date = new Date(s)
+  return Number.isNaN(date.getTime()) ? null : date
+}
+
+function moscowDateParts(date) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: DISPLAY_TZ,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(date)
+  const get = (type) => parts.find((p) => p.type === type)?.value
+  return {
+    year: get('year'),
+    month: get('month'),
+    day: get('day'),
+    hour: get('hour') === '24' ? '00' : get('hour'),
+    minute: get('minute'),
+  }
+}
+
 export function formatMarketDate(dateString) {
-  if (!dateString) return 'TBA'
-  const date = new Date(dateString)
-  if (Number.isNaN(date.getTime())) return 'TBA'
-  const now = new Date()
-  const isToday =
-    date.getDate() === now.getDate() &&
-    date.getMonth() === now.getMonth() &&
-    date.getFullYear() === now.getFullYear()
-  const time = date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true })
+  const date = parseMarketDate(dateString)
+  if (!date) return 'TBA'
+
+  const m = moscowDateParts(date)
+  const now = moscowDateParts(new Date())
+  const time = `${m.hour}:${m.minute}`
+
+  const isToday = m.year === now.year && m.month === now.month && m.day === now.day
   if (isToday) return `TODAY, ${time}`
-  return (
-    date.toLocaleDateString('en-US', { day: 'numeric', month: 'short' }).toUpperCase() +
-    `, ${time}`
-  )
+
+  const label = new Intl.DateTimeFormat('en-US', {
+    timeZone: DISPLAY_TZ,
+    day: 'numeric',
+    month: 'short',
+  })
+    .format(date)
+    .toUpperCase()
+  return `${label}, ${time}`
 }
 
 export function formatVolume(val) {

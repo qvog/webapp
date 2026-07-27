@@ -6,6 +6,11 @@ export const tradeApi = {
     return apiFetch(`/api/markets?${q}`)
   },
 
+  searchMarkets(query) {
+    const q = new URLSearchParams({ q: query })
+    return apiFetch(`/api/markets/search?${q}`)
+  },
+
   getPositions() {
     return apiFetch('/api/positions')
   },

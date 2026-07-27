@@ -78,7 +78,8 @@ class MarketCache:
             "active": "true",
             "closed": "false",
             "limit": str(limit),
-            "order": "volume_24hr",
+            # Gamma accepts volume24hr (not volume_24hr) — invalid order → 422 empty cache
+            "order": "volume24hr",
             "ascending": "false",
         }
         if slug:

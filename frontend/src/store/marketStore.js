@@ -1,7 +1,10 @@
 import { defineStore } from 'pinia'
 import { tradeApi } from '../api/tradeService'
+import { CRYPTO_LIVE_WINDOW_SUBS } from '../constants/categories'
 
 const FAV_KEY = 'qscalp_fav_v2'
+/** Silent refresh interval for rotating 5m/15m/1h/4h crypto windows. */
+const LIVE_WINDOW_POLL_MS = 15_000
 
 export const useMarketStore = defineStore('market', {
   state: () => ({
@@ -22,6 +25,7 @@ export const useMarketStore = defineStore('market', {
     sortBy: 'volume',
 
     _fetchId: 0,
+    _liveWindowTimer: null,
   }),
 
   getters: {
@@ -66,27 +70,54 @@ export const useMarketStore = defineStore('market', {
 
       return result
     },
+
+    isLiveCryptoWindow(state) {
+      return (
+        state.activeCategory === 'crypto' && CRYPTO_LIVE_WINDOW_SUBS.has(state.activeSubcategory)
+      )
+    },
   },
 
   actions: {
-    async loadMatches() {
-      if (this.activeCategory === 'favorites') return
+    async loadMatches({ silent = false } = {}) {
+      if (this.activeCategory === 'favorites') {
+        this._stopLiveWindowPoll()
+        return
+      }
 
       const fetchCategory = this.activeCategory
       const fetchSub = this.activeSubcategory
       const currentId = ++this._fetchId
 
-      this.isLoadingMarkets = true
+      if (!silent) this.isLoadingMarkets = true
       try {
         const data = await tradeApi.getMarkets(fetchCategory, fetchSub)
         if (this._fetchId === currentId) {
           this.matches = Array.isArray(data) ? data : []
         }
       } catch {
-        if (this._fetchId === currentId) this.matches = []
+        if (this._fetchId === currentId && !silent) this.matches = []
       } finally {
         if (this._fetchId === currentId) this.isLoadingMarkets = false
+        this._syncLiveWindowPoll()
       }
+    },
+
+    _stopLiveWindowPoll() {
+      if (this._liveWindowTimer) {
+        clearInterval(this._liveWindowTimer)
+        this._liveWindowTimer = null
+      }
+    },
+
+    _syncLiveWindowPoll() {
+      this._stopLiveWindowPoll()
+      if (!this.isLiveCryptoWindow) return
+      // Silently rotate windows when the current 5m/15m/… slot expires
+      this._liveWindowTimer = setInterval(() => {
+        if (this.isLiveCryptoWindow) this.loadMatches({ silent: true })
+        else this._stopLiveWindowPoll()
+      }, LIVE_WINDOW_POLL_MS)
     },
 
     setCategory(cat) {
@@ -98,6 +129,19 @@ export const useMarketStore = defineStore('market', {
 
     setSubcategory(sub) {
       if (this.activeSubcategory === sub) return
+      this.activeSubcategory = sub
+      this.loadMatches()
+    },
+
+    /** Navigate from search: open category + subcategory in one shot. */
+    navigateToCategory(category, subcategory = 'all') {
+      const cat = category || 'most_traded'
+      const sub = subcategory || 'all'
+      if (this.activeCategory === cat && this.activeSubcategory === sub) {
+        this.loadMatches()
+        return
+      }
+      this.activeCategory = cat
       this.activeSubcategory = sub
       this.loadMatches()
     },
