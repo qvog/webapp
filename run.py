@@ -1,61 +1,67 @@
+"""Dev launcher: FastAPI backend + Vite frontend."""
+from __future__ import annotations
+
+import os
+import signal
 import subprocess
 import sys
-import os
 import time
 
-def main():
-    print("🚀 [СИСТЕМА] Запуск HFT-Терминала (Режим Разработки)...")
 
-    # Определяем абсолютные пути
+def main() -> None:
+    print("🚀 [SYSTEM] Starting qScalp Terminal (dev)...")
+
     base_dir = os.path.dirname(os.path.abspath(__file__))
     frontend_dir = os.path.join(base_dir, "frontend")
-
-    # Команда для npm (учитываем разницу между Windows и Linux/WSL)
     npm_cmd = "npm.cmd" if os.name == "nt" else "npm"
 
-    # 1. Запускаем Backend (FastAPI) в фоне
-    print("🐍 Запуск Python Backend (Порт 8000)...")
-    backend_process = subprocess.Popen(
-        [sys.executable, "-m", "uvicorn", "src.main:app", "--host", "127.0.0.1", "--port", "8000", "--reload"]
+    print("🐍 Backend → http://0.0.0.0:8000")
+    backend = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "src.main:app",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "8000",
+            "--reload",
+        ],
+        cwd=base_dir,
     )
 
-    # Даем бэкенду секунду на старт, чтобы фронтенд не стучался в пустоту
     time.sleep(1)
 
-    # 2. Запускаем Frontend (Vue/Vite) в фоне
-    print("⚡ Запуск Vue Frontend (Порт 5173)...")
-    frontend_process = subprocess.Popen(
-        [npm_cmd, "run", "dev"],
-        cwd=frontend_dir # Указываем, что эту команду нужно выполнить в папке frontend-vue
-    )
+    print("⚡ Frontend → http://127.0.0.1:3005 (Vite proxies /api → :8000)")
+    frontend = subprocess.Popen([npm_cmd, "run", "dev"], cwd=frontend_dir)
+
+    def shutdown(*_args) -> None:
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGINT, shutdown)
+    signal.signal(signal.SIGTERM, shutdown)
 
     try:
-        # Бесконечный цикл, чтобы скрипт run.py не завершился сам по себе
         while True:
             time.sleep(1)
-            
-            # Если какой-то из серверов упал с ошибкой, тушим всё
-            if backend_process.poll() is not None or frontend_process.poll() is not None:
-                print("⚠️ Один из серверов неожиданно завершил работу.")
+            if backend.poll() is not None or frontend.poll() is not None:
+                print("⚠️ One of the servers exited unexpectedly.")
                 break
-                
     except KeyboardInterrupt:
-        # Срабатывает, когда вы нажимаете Ctrl+C в консоли
-        print("\n🛑 Получен сигнал остановки (Ctrl+C). Тушим серверы...")
-        
+        print("\n🛑 Stopping servers...")
     finally:
-        # Аккуратно завершаем оба процесса, чтобы освободить порты 8000 и 5173
-        if backend_process.poll() is None:
-            backend_process.terminate()
-            backend_process.wait()
-            print("✅ Backend остановлен.")
-            
-        if frontend_process.poll() is None:
-            frontend_process.terminate()
-            frontend_process.wait()
-            print("✅ Frontend остановлен.")
-            
-        print("🏁 Работа терминала полностью завершена.")
+        for name, proc in (("Backend", backend), ("Frontend", frontend)):
+            if proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait()
+                print(f"✅ {name} stopped.")
+        print("🏁 Done.")
+
 
 if __name__ == "__main__":
     main()

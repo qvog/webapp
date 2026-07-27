@@ -1,301 +1,319 @@
-import time
+"""Background position monitor: fill wait → TP order → SL via WebSocket."""
+from __future__ import annotations
+
 import asyncio
 import json
-import websockets
+import logging
 import os
-import re 
-from datetime import datetime
-from py_clob_client_v2 import OrderArgs, OrderType
+import time
+from contextlib import contextmanager
+from typing import Any
+
+import websockets
+from py_clob_client_v2 import OrderArgs, OrderType, PartialCreateOrderOptions
 from py_clob_client_v2.order_builder.constants import SELL
 
 from src.api.client import get_clob_client, run_sync
+from src.config import settings
 from src.database.db import SessionLocal
 from src.database.models import Position
+from src.services.orders import cancel_order, market_sell, parse_order_payload
 
-POLY_WS_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+logger = logging.getLogger(__name__)
 
-async def monitor_and_manage_position(order_id: str, entry_price: float, tp_price: float, sl_price: float, original_size: float, token_id: str, options, strategy: str):
-    print(f"👀 [Воркер] Наблюдаю за входом {order_id} (Стратегия: {strategy.upper()})...")
-    client = get_clob_client()
-    builder_code = os.getenv("BUILDER_CODE", "0x0000000000000000000000000000000000000000000000000000000000000000")
-    
-    actual_size = 0
-    is_filled = False
-    
-    # ФАЗА 1: ЖДЕМ ПОКУПКУ
-    for _ in range(86400):
-        try:
-            order_info = await run_sync(client.get_order, order_id)
-            order_data = order_info[0] if isinstance(order_info, list) and len(order_info) > 0 else order_info
-            status = order_data.get('status', '')
-            
-            if status in ['MATCHED', 'FILLED']:
-                size_matched = order_data.get('size_matched')
-                actual_size = int(float(size_matched) * 100) / 100.0 if size_matched and float(size_matched) > 0 else original_size
-                is_filled = True
-                print(f"⚙️ [Воркер] Позиция набрана. Куплено: {actual_size} акций.")
-                
-                db = SessionLocal()
-                try:
-                    pos = db.query(Position).filter(Position.order_id == order_id).first()
-                    if pos: 
-                        pos.status = "OPEN"
-                        pos.size = actual_size 
-                        db.commit()
-                finally: db.close()
-                break 
-                
-            elif status in ['CANCELED', 'EXPIRED']:
-                size_matched = order_data.get('size_matched')
-                if size_matched and float(size_matched) > 0:
-                    actual_size = int(float(size_matched) * 100) / 100.0
-                    is_filled = True
-                    print(f"⚠️ [Воркер] Базовый ордер отменен, но успели купить {actual_size} акций. Идем дальше!")
-                    db = SessionLocal()
-                    try:
-                        pos = db.query(Position).filter(Position.order_id == order_id).first()
-                        if pos: 
-                            pos.status = "OPEN"
-                            pos.size = actual_size 
-                            db.commit()
-                    finally: db.close()
-                    break
-                else:
-                    print(f"⚠️ [Воркер] Базовый ордер отменен. Отключаюсь.")
-                    db = SessionLocal()
-                    try:
-                        pos = db.query(Position).filter(Position.order_id == order_id).first()
-                        if pos: pos.status = "CANCELED"; db.commit()
-                    finally: db.close()
-                    return
-        except Exception: pass
-        await asyncio.sleep(5) 
-        
-    if not is_filled or actual_size == 0:
-        db = SessionLocal()
-        try:
-            pos = db.query(Position).filter(Position.order_id == order_id).first()
-            if pos: pos.status = "EXPIRED"; db.commit()
-        finally: db.close()
+# Avoid routing WS through HTTP proxy
+os.environ.setdefault("no_proxy", "ws-subscriptions-clob.polymarket.com")
+
+
+@contextmanager
+def db_session():
+    db = SessionLocal()
+    try:
+        yield db
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+def _update_position(order_id: str, **fields: Any) -> None:
+    with db_session() as db:
+        pos = db.query(Position).filter(Position.order_id == order_id).first()
+        if not pos:
+            return
+        for key, value in fields.items():
+            setattr(pos, key, value)
+
+
+def _apply_book_snapshot(bids: dict, asks: dict, payload: dict) -> None:
+    bids.clear()
+    asks.clear()
+    for b in payload.get("bids", []) or []:
+        bids[float(b["price"])] = float(b["size"])
+    for a in payload.get("asks", []) or []:
+        asks[float(a["price"])] = float(a["size"])
+
+
+def _apply_price_change(bids: dict, asks: dict, ev: dict) -> None:
+    changes = ev.get("changes") or []
+    if not changes:
+        for b in ev.get("bids", []) or []:
+            p, s = float(b["price"]), float(b["size"])
+            if s == 0:
+                bids.pop(p, None)
+            else:
+                bids[p] = s
+        for a in ev.get("asks", []) or []:
+            p, s = float(a["price"]), float(a["size"])
+            if s == 0:
+                asks.pop(p, None)
+            else:
+                asks[p] = s
         return
 
-    # ФАЗА 2: ТЕЙК-ПРОФИТ
+    for ch in changes:
+        p, s = float(ch["price"]), float(ch["size"])
+        side = ch.get("side")
+        book = bids if side == "BUY" else asks if side == "SELL" else None
+        if book is None:
+            continue
+        if s == 0:
+            book.pop(p, None)
+        else:
+            book[p] = s
+
+
+async def _wait_for_fill(
+    client: Any,
+    order_id: str,
+    original_size: float,
+    max_polls: int = 86400,
+    poll_interval: float = 5.0,
+) -> float | None:
+    """Return filled size, or None if order cancelled/expired empty."""
+    for _ in range(max_polls):
+        try:
+            order_info = await run_sync(client.get_order, order_id)
+            order_data = parse_order_payload(order_info) or {}
+            status = order_data.get("status", "")
+            size_matched = order_data.get("size_matched")
+
+            if status in ("MATCHED", "FILLED"):
+                size = (
+                    int(float(size_matched) * 100) / 100.0
+                    if size_matched and float(size_matched) > 0
+                    else original_size
+                )
+                logger.info("[Worker] filled %s size=%s", order_id, size)
+                _update_position(order_id, status="OPEN", size=size)
+                return size
+
+            if status in ("CANCELED", "EXPIRED"):
+                if size_matched and float(size_matched) > 0:
+                    size = int(float(size_matched) * 100) / 100.0
+                    logger.warning("[Worker] partial fill on cancel: %s", size)
+                    _update_position(order_id, status="OPEN", size=size)
+                    return size
+                logger.warning("[Worker] order cancelled empty: %s", order_id)
+                _update_position(order_id, status="CANCELED")
+                return None
+        except Exception:
+            pass
+        await asyncio.sleep(poll_interval)
+    return None
+
+
+async def _place_take_profit(
+    client: Any,
+    token_id: str,
+    size: float,
+    tp_price: float,
+    options: PartialCreateOrderOptions,
+    attempts: int = 10,
+) -> str | None:
+    for _ in range(attempts):
+        try:
+            args = OrderArgs(
+                price=tp_price,
+                size=size,
+                side=SELL,
+                token_id=token_id,
+                builder_code=settings.builder_code,
+            )
+            resp = await run_sync(
+                client.create_and_post_order,
+                order_args=args,
+                options=options,
+                order_type=OrderType.GTC,
+            )
+            if resp and resp.get("success"):
+                tp_id = resp.get("orderID")
+                logger.info("[Worker] TP placed: %s", tp_id)
+                return tp_id
+        except Exception:
+            pass
+        await asyncio.sleep(2)
+    return None
+
+
+async def _seed_order_book(client: Any, token_id: str, bids: dict, asks: dict) -> None:
+    try:
+        ob = await run_sync(client.get_order_book, token_id)
+        if isinstance(ob, dict):
+            _apply_book_snapshot(bids, asks, ob)
+    except Exception:
+        pass
+
+
+async def _check_tp_status(client: Any, order_id: str, tp_order_id: str) -> bool:
+    """Return True if monitoring should stop (TP filled or market resolved)."""
+    try:
+        tp_info = await run_sync(client.get_order, tp_order_id)
+        tp_data = parse_order_payload(tp_info)
+        if not isinstance(tp_data, dict):
+            return False
+
+        status = tp_data.get("status")
+        if status in ("MATCHED", "FILLED"):
+            logger.info("[Worker] TP hit for %s", order_id)
+            _update_position(
+                order_id,
+                status="CLOSED_TP",
+                exit_price=float(tp_data.get("price") or 0),
+            )
+            return True
+        if status in ("CANCELED", "EXPIRED"):
+            logger.info("[Worker] TP cancelled (resolved) for %s", order_id)
+            _update_position(order_id, status="RESOLVED", exit_price=1.0)
+            return True
+    except Exception:
+        pass
+    return False
+
+
+async def monitor_and_manage_position(
+    order_id: str,
+    entry_price: float,
+    tp_price: float | None,
+    sl_price: float | None,
+    original_size: float,
+    token_id: str,
+    options: PartialCreateOrderOptions,
+    strategy: str,
+) -> None:
+    logger.info("[Worker] watching %s strategy=%s", order_id, strategy.upper())
+    client = get_clob_client()
+
+    actual_size = await _wait_for_fill(client, order_id, original_size)
+    if not actual_size:
+        _update_position(order_id, status="EXPIRED")
+        return
+
     tp_order_id = None
     if tp_price:
-        for _ in range(10):
-            try:
-                tp_args = OrderArgs(price=tp_price, size=actual_size, side=SELL, token_id=token_id, builder_code=builder_code)
-                tp_resp = await run_sync(client.create_and_post_order, order_args=tp_args, options=options, order_type=OrderType.GTC)
-                if tp_resp and tp_resp.get("success"):
-                    tp_order_id = tp_resp.get('orderID')
-                    print(f"✅ [Воркер] ТЕЙК-ПРОФИТ ВЫСТАВЛЕН! ID: {tp_order_id}")
-                    break
-            except Exception: pass
-            await asyncio.sleep(2)
+        tp_order_id = await _place_take_profit(
+            client, token_id, actual_size, tp_price, options
+        )
 
-    # ФАЗА 3: СТОП-ЛОСС РАДАР ЧЕРЕЗ WEBSOCKET
-    sl_trigger_price, sell_ratio = sl_price, 1.0 
-    if strategy == 'match': sell_ratio = 0.5 
-    sl_trigger_price = max(0.01, round(sl_trigger_price, 2))
-    
-    print(f"🛡️ [Воркер] Стоп-Лосс АКТИВЕН: {sl_trigger_price}$ (Слушаю WebSocket...)")
-    os.environ["no_proxy"] = "ws-subscriptions-clob.polymarket.com"
+    sell_ratio = 0.5 if strategy == "match" else 1.0
+    sl_trigger = max(0.01, round(float(sl_price or (entry_price - 0.12)), 2))
+    logger.info("[Worker] SL active @ %s for %s", sl_trigger, order_id)
 
-    bids_book = {}
-    asks_book = {}
+    bids_book: dict[float, float] = {}
+    asks_book: dict[float, float] = {}
     sl_confirmations = 0
     empty_book_count = 0
     last_tp_check = time.time()
 
-    try:
-        ob = await run_sync(client.get_order_book, token_id)
-        for b in ob.get("bids", []): bids_book[float(b['price'])] = float(b['size'])
-        for a in ob.get("asks", []): asks_book[float(a['price'])] = float(a['size'])
-    except: pass
+    await _seed_order_book(client, token_id, bids_book, asks_book)
 
-    while True: 
+    while True:
         try:
-            async with websockets.connect(POLY_WS_URL, ping_interval=None) as ws:
+            async with websockets.connect(settings.poly_ws_url, ping_interval=None) as ws:
                 await ws.send(json.dumps({"assets_ids": [token_id], "type": "market"}))
-                
-                async def ping_loop():
+
+                async def ping_loop() -> None:
                     while True:
                         await asyncio.sleep(10)
-                        try: await ws.send("PING")
-                        except: break
+                        try:
+                            await ws.send("PING")
+                        except Exception:
+                            break
 
                 ping_task = asyncio.create_task(ping_loop())
-
                 try:
                     while True:
                         if time.time() - last_tp_check > 15:
                             last_tp_check = time.time()
-                            if tp_order_id:
-                                try:
-                                    tp_info = await run_sync(client.get_order, tp_order_id)
-                                    tp_data = tp_info[0] if isinstance(tp_info, list) and len(tp_info) > 0 else tp_info
-                                    if isinstance(tp_data, dict):
-                                        status = tp_data.get('status')
-                                        if status in ['MATCHED', 'FILLED']:
-                                            print(f"💰 [Воркер] ТЕЙК-ПРОФИТ СРАБОТАЛ!")
-                                            db = SessionLocal()
-                                            try:
-                                                pos = db.query(Position).filter(Position.order_id == order_id).first()
-                                                if pos:
-                                                    pos.status = "CLOSED_TP"
-                                                    pos.exit_price = float(tp_data.get('price', pos.tp_price))
-                                                    db.commit()
-                                            finally: db.close()
-                                            return 
-                                        elif status in ['CANCELED', 'EXPIRED']:
-                                            print(f"🏁 [Воркер] ТП отменен биржей. Матч завершен!")
-                                            db = SessionLocal()
-                                            try:
-                                                pos = db.query(Position).filter(Position.order_id == order_id).first()
-                                                if pos: pos.status = "RESOLVED"; pos.exit_price = 1.0; db.commit()
-                                            finally: db.close()
-                                            return
-                                except: pass
-                            
-                            try:
-                                ob = await run_sync(client.get_order_book, token_id)
-                                if isinstance(ob, dict) and (ob.get("bids") or ob.get("asks")):
-                                    bids_book.clear()
-                                    asks_book.clear()
-                                    for b in ob.get("bids", []): bids_book[float(b['price'])] = float(b['size'])
-                                    for a in ob.get("asks", []): asks_book[float(a['price'])] = float(a['size'])
-                            except: pass
-                            
-                        msg = await asyncio.wait_for(ws.recv(), timeout=30.0)
-                        if msg == "PONG": continue
-                        
+                            if tp_order_id and await _check_tp_status(client, order_id, tp_order_id):
+                                return
+                            await _seed_order_book(client, token_id, bids_book, asks_book)
+
+                        try:
+                            msg = await asyncio.wait_for(ws.recv(), timeout=30.0)
+                        except asyncio.TimeoutError:
+                            continue
+
+                        if msg == "PONG":
+                            continue
+
                         data = json.loads(msg)
                         events = data if isinstance(data, list) else [data]
 
                         for ev in events:
-                            if ev.get("asset_id") and ev.get("asset_id") != token_id: continue
-                            
-                            if ev.get("event_type") == "book":
-                                bids_book.clear(); asks_book.clear()
-                                for b in ev.get("bids", []): bids_book[float(b['price'])] = float(b['size'])
-                                for a in ev.get("asks", []): asks_book[float(a['price'])] = float(a['size'])
-                            
-                            elif ev.get("event_type") == "price_change":
-                                changes = ev.get("changes", [])
-                                if not changes:
-                                    for b in ev.get("bids", []):
-                                        p, s = float(b["price"]), float(b["size"])
-                                        if s == 0: bids_book.pop(p, None)
-                                        else: bids_book[p] = s
-                                    for a in ev.get("asks", []):
-                                        p, s = float(a["price"]), float(a["size"])
-                                        if s == 0: asks_book.pop(p, None)
-                                        else: asks_book[p] = s
-                                else:
-                                    for ch in changes:
-                                        p, s = float(ch["price"]), float(ch["size"])
-                                        side = ch.get("side")
-                                        if side == "BUY":
-                                            if s == 0: bids_book.pop(p, None)
-                                            else: bids_book[p] = s
-                                        elif side == "SELL":
-                                            if s == 0: asks_book.pop(p, None)
-                                            else: asks_book[p] = s
+                            if ev.get("asset_id") and ev.get("asset_id") != token_id:
+                                continue
+                            etype = ev.get("event_type")
+                            if etype == "book":
+                                _apply_book_snapshot(bids_book, asks_book, ev)
+                            elif etype == "price_change":
+                                _apply_price_change(bids_book, asks_book, ev)
 
                         if not bids_book and not asks_book:
                             empty_book_count += 1
                             if empty_book_count > 20:
-                                print(f"🏁 [Воркер] Стакан пуст. Матч завершен!")
-                                db = SessionLocal()
-                                try:
-                                    pos = db.query(Position).filter(Position.order_id == order_id).first()
-                                    if pos: pos.status = "RESOLVED"; pos.exit_price = 1.0; db.commit()
-                                finally: db.close()
+                                logger.info("[Worker] empty book → RESOLVED %s", order_id)
+                                _update_position(order_id, status="RESOLVED", exit_price=1.0)
                                 return
                             continue
-                        else:
-                            empty_book_count = 0
+                        empty_book_count = 0
 
-                        best_bid = max(bids_book.keys()) if bids_book else 0
-                        best_ask = min(asks_book.keys()) if asks_book else 1
-                        spread = best_ask - best_bid 
-                        
-                        if spread > 0.15:
+                        best_bid = max(bids_book) if bids_book else 0
+                        best_ask = min(asks_book) if asks_book else 1
+                        if best_ask - best_bid > 0.15:
                             sl_confirmations = 0
-                            continue 
-                        
-                        if 0 < best_bid <= sl_trigger_price:
+                            continue
+
+                        if 0 < best_bid <= sl_trigger:
                             sl_confirmations += 1
                             if sl_confirmations < 2:
-                                continue 
-                                
-                            print(f"🚨 [Воркер] СТОП-ЛОСС ПРОБИТ! Цена: {best_bid}$")
-                            
-                            # 🎯 ФИКС: Безопасная отмена ТП через синхронную обертку
+                                continue
+
+                            logger.warning("[Worker] SL hit @ %s for %s", best_bid, order_id)
                             if tp_order_id:
-                                def sync_cancel_tp():
-                                    class OrderProxy:
-                                        def __init__(self, _id):
-                                            self.orderID, self.id = _id, _id
-                                    if hasattr(client, "cancel"):
-                                        try: client.cancel(tp_order_id)
-                                        except AttributeError:
-                                            try: client.cancel(OrderProxy(tp_order_id))
-                                            except: pass
-                                    elif hasattr(client, "cancel_order"):
-                                        try: client.cancel_order(tp_order_id)
-                                        except AttributeError:
-                                            try: client.cancel_order(OrderProxy(tp_order_id))
-                                            except: pass
-                                await run_sync(sync_cancel_tp)
-                            
-                            shares_to_sell = round(actual_size * sell_ratio, 2)
-                            
-                            async def safe_market_sell(t_size):
-                                current_size = t_size
-                                for _ in range(2): 
-                                    try:
-                                        s_args = OrderArgs(price=0.01, size=current_size, side=SELL, token_id=token_id, builder_code=builder_code)
-                                        resp = await run_sync(client.create_and_post_order, order_args=s_args, options=options, order_type=OrderType.GTC)
-                                        if resp and isinstance(resp, dict) and resp.get("error"):
-                                            err = resp.get("error")
-                                            if "balance" in err:
-                                                m = re.search(r"balance:\s*(\d+)", err)
-                                                if m:
-                                                    current_size = int(int(m.group(1)) / 1000000.0 * 100) / 100.0
-                                                    if current_size <= 0: return None
-                                                    continue 
-                                        return resp
-                                    except Exception as e:
-                                        err = str(e)
-                                        if "balance" in err:
-                                            m = re.search(r"balance:\s*(\d+)", err)
-                                            if m:
-                                                current_size = int(int(m.group(1)) / 1000000.0 * 100) / 100.0
-                                                if current_size <= 0: return None
-                                                continue
-                                        return None
-                                return None
+                                await cancel_order(tp_order_id)
 
-                            sl_resp = await safe_market_sell(shares_to_sell)
-                            
-                            if sl_resp and (isinstance(sl_resp, dict) and (sl_resp.get("success") or sl_resp.get("orderID") or sl_resp.get("id"))):
-                                print(f"✅ [Воркер] Позиция ликвидирована.")
-                                db = SessionLocal()
-                                try:
-                                    pos = db.query(Position).filter(Position.order_id == order_id).first()
-                                    if pos:
-                                        pos.status = "CLOSED_SL"
-                                        pos.exit_price = best_bid
-                                        db.commit()
-                                finally: db.close()
+                            shares = round(actual_size * sell_ratio, 2)
+                            sl_resp = await market_sell(token_id, shares, options)
+
+                            if sl_resp and (
+                                sl_resp.get("success")
+                                or sl_resp.get("orderID")
+                                or sl_resp.get("id")
+                            ):
+                                logger.info("[Worker] SL filled for %s", order_id)
+                                _update_position(
+                                    order_id, status="CLOSED_SL", exit_price=best_bid
+                                )
                             else:
-                                print(f"❌ [Воркер] Ошибка при исполнении Стоп-Лосса.")
-                            return 
-                        else:
-                            sl_confirmations = 0
+                                logger.error("[Worker] SL order failed for %s", order_id)
+                            return
 
+                        sl_confirmations = 0
                 finally:
                     ping_task.cancel()
-        except Exception as e:
+        except Exception as exc:
+            logger.debug("[Worker] WS reconnect %s: %s", order_id, exc)
             await asyncio.sleep(2)

@@ -24,14 +24,30 @@ export function useOrderBook() {
   let metricsLoop = null
   let lastMessageTime = Date.now() // 🎯 Запоминаем время последнего тика
 
+  const teardownSocket = () => {
+    if (ws) {
+      ws.onclose = null
+      ws.close()
+      ws = null
+    }
+    if (watchdogInterval) {
+      clearInterval(watchdogInterval)
+      watchdogInterval = null
+    }
+    if (metricsLoop) {
+      clearInterval(metricsLoop)
+      metricsLoop = null
+    }
+  }
+
+  /** Fully stop streaming (user navigated away). */
   const disconnect = () => {
-    if (ws) { ws.onclose = null; ws.close(); ws = null }
-    if (watchdogInterval) { clearInterval(watchdogInterval); watchdogInterval = null }
-    if (metricsLoop) { clearInterval(metricsLoop); metricsLoop = null }
+    activeMarketCache = null
+    teardownSocket()
   }
 
   const connectToMarket = (subMarket, onReadyCallback = null) => {
-    disconnect()
+    teardownSocket()
     isConnecting.value = true
     activeMarketCache = subMarket
 
@@ -53,13 +69,13 @@ export function useOrderBook() {
       
       lastMessageTime = Date.now()
 
-      // 🎯 ПАССИВНЫЙ WATCHDOG: Никаких отправок PING. Только слушаем!
+      // Passive watchdog: reconnect if no ticks for 15s
       watchdogInterval = setInterval(() => {
-        // Если от Полимаркета нет тиков дольше 15 секунд - мягко переподключаемся
         if (Date.now() - lastMessageTime > 15000) {
-          console.warn("💀 HFT Watchdog: Stream dead (15s timeout), reconnecting...")
-          disconnect()
-          if (activeMarketCache) connectToMarket(activeMarketCache)
+          console.warn('HFT Watchdog: stream idle 15s, reconnecting...')
+          const market = activeMarketCache
+          teardownSocket()
+          if (market) connectToMarket(market)
         }
       }, 5000)
     }
@@ -114,10 +130,12 @@ export function useOrderBook() {
       })
     }
 
-    ws.onclose = () => { 
-      // Страховочный реконнект только при физическом обрыве сокета
-      if (activeMarketCache && Date.now() - lastMessageTime < 15000) {
-        setTimeout(() => connectToMarket(activeMarketCache), 1000) 
+    ws.onclose = () => {
+      const market = activeMarketCache
+      if (market && Date.now() - lastMessageTime < 15000) {
+        setTimeout(() => {
+          if (activeMarketCache === market) connectToMarket(market)
+        }, 1000)
       }
     }
 

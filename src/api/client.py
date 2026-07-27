@@ -1,68 +1,65 @@
-import os
+"""Polymarket CLOB client singleton and async bridge."""
+from __future__ import annotations
+
 import asyncio
 import functools
-from dotenv import load_dotenv
+import logging
+import os
+from typing import Any, Callable, TypeVar
 
-# 1. Принудительно грузим .env в самом начале
-load_dotenv()
+from py_clob_client_v2 import ApiCreds, ClobClient, SignatureTypeV2
 
-# 2. Достаем прокси и очищаем от возможных кавычек и пробелов
-PROXY_URL = os.getenv("POLY_PROXY")
-if PROXY_URL:
-    PROXY_URL = PROXY_URL.strip().strip("'").strip('"')
-    os.environ["http_proxy"] = PROXY_URL
-    os.environ["https_proxy"] = PROXY_URL
-    os.environ["HTTP_PROXY"] = PROXY_URL
-    os.environ["HTTPS_PROXY"] = PROXY_URL
+from src.config import settings
 
-from py_clob_client_v2 import ClobClient, SignatureTypeV2, ApiCreds
+logger = logging.getLogger(__name__)
 
-HOST = os.getenv("POLY_HOST", "https://clob.polymarket.com")
-CHAIN_ID = int(os.getenv("POLY_CHAIN_ID", 137))
+# Inject proxy into process env early for libraries that read it
+if settings.poly_proxy:
+    for key in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"):
+        os.environ[key] = settings.poly_proxy
 
-PRIVATE_KEY = os.getenv("POLY_PRIVATE_KEY")
-FUNDER_ADDRESS = os.getenv("POLY_FUNDER_ADDRESS")
+_clob_client: ClobClient | None = None
+T = TypeVar("T")
 
-_clob_client = None
 
 def get_clob_client() -> ClobClient:
-    """Инициализирует клиент 1 раз при первом обращении (Singleton)."""
+    """Initialize ClobClient once (singleton)."""
     global _clob_client
-    if _clob_client is None:
-        if not PRIVATE_KEY or not FUNDER_ADDRESS:
-            raise ValueError("Не настроены приватные ключи в .env")
-            
-        _clob_client = ClobClient(
-            host=HOST, 
-            key=PRIVATE_KEY, 
-            chain_id=CHAIN_ID, 
-            signature_type=SignatureTypeV2.POLY_1271, 
-            funder=FUNDER_ADDRESS
-        )
-        
-        api_creds = ApiCreds(
-            api_key=os.getenv("POLY_API_KEY"), 
-            api_secret=os.getenv("POLY_API_SECRET"), 
-            api_passphrase=os.getenv("POLY_API_PASSPHRASE")
-        )
-        _clob_client.set_api_creds(api_creds)
+    if _clob_client is not None:
+        return _clob_client
 
-        # 🎯 ЖЕЛЕЗОБЕТОННАЯ ИНЪЕКЦИЯ ПРОКСИ НАПРЯМУЮ В СЕССИЮ
-        if PROXY_URL:
-            try:
-                # Мы игнорируем системные настройки и жестко зашиваем прокси в объект requests
-                _clob_client.session.proxies = {
-                    "http": PROXY_URL,
-                    "https": PROXY_URL
-                }
-                print("🌐 [PROXY] Трафик успешно направлен во внутреннюю сессию Полимаркета.")
-            except Exception as e:
-                print(f"⚠️ [PROXY] Ошибка привязки: {e}")
+    if not settings.poly_private_key or not settings.poly_funder_address:
+        raise ValueError("Не настроены POLY_PRIVATE_KEY / POLY_FUNDER_ADDRESS в .env")
+
+    _clob_client = ClobClient(
+        host=settings.poly_host,
+        key=settings.poly_private_key,
+        chain_id=settings.poly_chain_id,
+        signature_type=SignatureTypeV2.POLY_1271,
+        funder=settings.poly_funder_address,
+    )
+    _clob_client.set_api_creds(
+        ApiCreds(
+            api_key=settings.poly_api_key,
+            api_secret=settings.poly_api_secret,
+            api_passphrase=settings.poly_api_passphrase,
+        )
+    )
+
+    if settings.poly_proxy:
+        try:
+            _clob_client.session.proxies = {
+                "http": settings.poly_proxy,
+                "https": settings.poly_proxy,
+            }
+            logger.info("[PROXY] CLOB session proxies configured")
+        except Exception as exc:
+            logger.warning("[PROXY] bind failed: %s", exc)
 
     return _clob_client
 
-async def run_sync(func, *args, **kwargs):
-    """Выполняет синхронные вызовы ClobClient в фоновом пуле потоков."""
+
+async def run_sync(func: Callable[..., T], *args: Any, **kwargs: Any) -> T:
+    """Run a blocking ClobClient call in the default executor."""
     loop = asyncio.get_running_loop()
-    pfunc = functools.partial(func, *args, **kwargs)
-    return await loop.run_in_executor(None, pfunc)
+    return await loop.run_in_executor(None, functools.partial(func, *args, **kwargs))
