@@ -4,8 +4,8 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from fastapi import APIRouter, BackgroundTasks, Depends
-from pydantic import BaseModel
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from pydantic import BaseModel, Field, field_validator
 from py_clob_client_v2 import OrderArgs, OrderType
 from py_clob_client_v2.order_builder.constants import BUY, SELL
 from sqlalchemy.orm import Session
@@ -22,17 +22,22 @@ from src.services.orders import (
     is_resolved_error,
     market_sell,
     parse_order_payload,
+    validate_limit_price,
 )
 from src.workers.monitor import monitor_and_manage_position
 
 router = APIRouter(tags=["trade"])
 logger = logging.getLogger(__name__)
 
+# Polymarket CLOB limit prices must stay inside the tradable tick band.
+MIN_LIMIT_PRICE = 0.01
+MAX_LIMIT_PRICE = 0.99
+
 
 class TradeRequest(BaseModel):
     token_id: str
     condition_id: str
-    price: float
+    price: float = Field(..., description="Limit price in [0.01, 0.99]")
     side: str
     bankroll: float
     risk_percent: float = 100
@@ -40,6 +45,12 @@ class TradeRequest(BaseModel):
     take_profit_price: float | None = None
     stop_loss_price: float | None = None
     strategy: str = "custom"
+
+    @field_validator("price")
+    @classmethod
+    def price_in_band(cls, value: float) -> float:
+        validate_limit_price(value)
+        return value
 
 
 @router.post("/order")
@@ -49,6 +60,12 @@ async def place_order(
     db: Session = Depends(get_db),
 ):
     safe_price = round(float(req.price), 2)
+    # Defense in depth: reject out-of-band prices even if model validation is bypassed.
+    try:
+        validate_limit_price(safe_price)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     side_const = BUY if req.side.upper() == "BUY" else SELL
     strategy = req.strategy
 

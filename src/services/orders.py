@@ -13,6 +13,29 @@ from src.config import settings
 
 logger = logging.getLogger(__name__)
 
+# Polymarket binary outcome prices: open interval edges are untradeable / resolved.
+MIN_LIMIT_PRICE = 0.01
+MAX_LIMIT_PRICE = 0.99
+
+
+def validate_limit_price(price: float) -> float:
+    """
+    Reject limit prices outside the tradable band [0.01, 0.99].
+
+    Raises:
+        ValueError: if price is below 0.01 or above 0.99 (or non-numeric).
+    """
+    try:
+        p = float(price)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Цена ордера должна быть числом") from exc
+    if p < MIN_LIMIT_PRICE or p > MAX_LIMIT_PRICE:
+        raise ValueError(
+            f"Цена ордера {p} вне допустимого диапазона "
+            f"[{MIN_LIMIT_PRICE}, {MAX_LIMIT_PRICE}]"
+        )
+    return p
+
 
 class OrderProxy:
     """Adapter for clob client cancel methods that expect an object with orderID."""

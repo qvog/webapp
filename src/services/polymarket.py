@@ -8,6 +8,7 @@ from src.services.orders import (
     is_resolved_error,
     market_sell,
     parse_order_payload,
+    validate_limit_price,
 )
 
 __all__ = [
@@ -19,4 +20,5 @@ __all__ = [
     "is_resolved_error",
     "market_sell",
     "parse_order_payload",
+    "validate_limit_price",
 ]
