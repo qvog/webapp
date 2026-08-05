@@ -31,7 +31,7 @@
       </div>
 
       <div class="mb-4">
-        <label class="block text-[10px] text-zinc-500 mb-1.5 uppercase tracking-widest">Volume (USDC)</label>
+        <label class="block text-[10px] text-zinc-500 mb-1.5 uppercase tracking-widest">Bankroll (USDC)</label>
         <input
           v-model="marketStore.tradeSize"
           type="number"
@@ -56,6 +56,37 @@
             class="w-full border border-zinc-800 rounded-lg px-2 py-2 text-sm font-bold outline-none focus:border-indigo-400 bg-[#050505] text-indigo-400 transition-all"
           />
         </div>
+      </div>
+
+      <!-- 4 HFT presets: override fields + fire /order at best ask -->
+      <div v-else class="flex flex-col gap-2">
+        <p class="text-[9px] text-zinc-600 uppercase tracking-wider mb-0.5">
+          One-tap → best ask
+        </p>
+        <button
+          v-for="p in PRESETS"
+          :key="p.id"
+          type="button"
+          @click="firePreset(p)"
+          :disabled="!activeSub || submitting === p.id"
+          :class="[
+            'w-full text-left px-3 py-2 rounded-xl border transition-all',
+            marketStore.activePreset === p.id
+              ? 'border-[#00e5ff]/60 bg-[#00e5ff]/10 shadow-[0_0_12px_rgba(0,229,255,0.12)]'
+              : 'border-zinc-800/70 bg-[#050505] hover:border-zinc-600',
+            (!activeSub || submitting) ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer',
+          ]"
+        >
+          <div class="flex items-center justify-between gap-2">
+            <span class="text-[11px] font-bold text-gray-200 tracking-wide">{{ p.label }}</span>
+            <span class="text-[9px] font-mono text-zinc-500">{{ p.sizeHint }}</span>
+          </div>
+          <div class="mt-0.5 text-[9px] font-mono text-zinc-500">
+            <span class="text-[#00e5ff]">{{ p.tpHint }}</span>
+            <span class="mx-1 text-zinc-700">·</span>
+            <span class="text-indigo-400">{{ p.slHint }}</span>
+          </div>
+        </button>
       </div>
     </div>
 
@@ -83,15 +114,64 @@
 </template>
 
 <script setup>
+import { ref } from 'vue'
 import { useMarketStore } from '../../store/marketStore'
 
-defineProps({
+const props = defineProps({
   event: Object,
   activeSub: Object,
 })
-defineEmits(['close', 'select-sub'])
+const emit = defineEmits(['close', 'select-sub', 'run-preset'])
 
 const marketStore = useMarketStore()
+const submitting = ref(null)
+
+const PRESETS = [
+  {
+    id: 'rebound',
+    label: 'Rebound Scalp',
+    sizeHint: '40%',
+    tpHint: 'TP +3¢',
+    slHint: 'SL −5¢',
+    riskPercent: 40,
+    tpOffsetCents: 3,
+    slOffsetCents: 5,
+    strategy: 'rebound',
+  },
+  {
+    id: 'partial',
+    label: 'Partial TP',
+    sizeHint: '100%',
+    tpHint: 'TP dual',
+    slHint: 'SL −4¢',
+    riskPercent: 100,
+    tpOffsetCents: 3, // display; backend places +3 and +6
+    slOffsetCents: 4,
+    strategy: 'partial',
+  },
+  {
+    id: 'result',
+    label: 'Result Hold',
+    sizeHint: '≥$5 / 5%',
+    tpHint: 'TP none',
+    slHint: 'SL 50%',
+    riskPercent: null, // special sizing
+    tpOffsetCents: null,
+    slOffsetCents: null, // SL = entry * 0.5
+    strategy: 'result',
+  },
+  {
+    id: 'momentum',
+    label: 'Momentum',
+    sizeHint: '60%',
+    tpHint: 'TP +6¢',
+    slHint: 'SL −3¢',
+    riskPercent: 60,
+    tpOffsetCents: 6,
+    slOffsetCents: 3,
+    strategy: 'momentum',
+  },
+]
 
 function modeBtnClass(mode) {
   const on = marketStore.tradingMode === mode
@@ -101,5 +181,33 @@ function modeBtnClass(mode) {
       ? 'bg-[#00e5ff] text-black shadow-[0_0_10px_rgba(0,229,255,0.3)]'
       : 'text-zinc-500 hover:text-zinc-300',
   ]
+}
+
+/**
+ * Override store fields for visibility, then ask Terminal to submit /order.
+ */
+function firePreset(preset) {
+  if (!props.activeSub || submitting.value) return
+
+  marketStore.tradingMode = 'presets'
+  marketStore.activePreset = preset.id
+
+  // Mirror offsets into custom fields so the panel stays consistent
+  if (preset.tpOffsetCents != null) marketStore.tpOffset = preset.tpOffsetCents
+  if (preset.slOffsetCents != null) marketStore.slOffset = preset.slOffsetCents
+
+  submitting.value = preset.id
+  emit('run-preset', {
+    strategy: preset.strategy,
+    riskPercent: preset.riskPercent,
+    tpOffsetCents: preset.tpOffsetCents,
+    slOffsetCents: preset.slOffsetCents,
+    // Result Hold: size = max(5% bankroll, $5)
+    resultHold: preset.strategy === 'result',
+  })
+  // Parent clears busy state via next tick order completion; local unlock shortly
+  setTimeout(() => {
+    if (submitting.value === preset.id) submitting.value = null
+  }, 2500)
 }
 </script>

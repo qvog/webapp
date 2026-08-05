@@ -14,7 +14,8 @@ export const useMarketStore = defineStore('market', {
     tradeSize: 10,
     tpOffset: 5,
     slOffset: 15,
-    activePreset: '4c',
+    /** Fast-mode preset: rebound | partial | result | momentum */
+    activePreset: 'rebound',
 
     isLoadingMarkets: false,
     activeCategory: 'most_traded',

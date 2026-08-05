@@ -13,6 +13,7 @@
           :active-sub="activeSubMarket"
           @close="closeTerminal"
           @select-sub="openSubMarket"
+          @run-preset="handleRunPreset"
         />
 
         <div class="flex-1 relative flex flex-col min-w-[350px]">
@@ -35,13 +36,21 @@
             >
               {{ activeSubMarket.question }}
             </h2>
-            <div
-              :class="[
-                'px-2.5 py-1 rounded-md text-[11px] font-mono font-bold border transition-colors whitespace-nowrap',
-                spreadBadgeClass,
-              ]"
-            >
-              SPREAD: {{ activeSpreadCents }}¢
+            <div class="flex items-center gap-2 shrink-0">
+              <div
+                class="px-2 py-1 rounded-md text-[10px] font-mono font-bold border border-zinc-700 text-zinc-400"
+                title="Book update velocity"
+              >
+                {{ velocity }}/s
+              </div>
+              <div
+                :class="[
+                  'px-2.5 py-1 rounded-md text-[11px] font-mono font-bold border transition-colors whitespace-nowrap',
+                  spreadBadgeClass,
+                ]"
+              >
+                SPREAD: {{ activeSpreadCents }}¢
+              </div>
             </div>
           </div>
 
@@ -55,6 +64,10 @@
             :ladderYes="ladderYes"
             :ladderNo="ladderNo"
             :currentTokenId="activeTeam === 1 ? activeSubMarket.token_id_yes : activeSubMarket.token_id_no"
+            :midPrice="activeTeam === 1 ? midYes : midNo"
+            :imbalance="activeTeam === 1 ? imbalanceYes : imbalanceNo"
+            :tape="activeTeam === 1 ? tapeYes : tapeNo"
+            :velocity="velocity"
             @placeOrder="handlePlaceOrder"
           />
         </div>
@@ -92,7 +105,16 @@ const {
   spreadYes,
   spreadNo,
   bestBidYes,
+  bestAskYes,
   bestBidNo,
+  bestAskNo,
+  midYes,
+  midNo,
+  imbalanceYes,
+  imbalanceNo,
+  tapeYes,
+  tapeNo,
+  velocity,
   isConnecting,
   connectToMarket,
   disconnect,
@@ -138,6 +160,12 @@ const livePositions = computed(() =>
   })
 )
 
+const currentBestAskCents = () => {
+  const ask = activeTeam.value === 1 ? bestAskYes.value : bestAskNo.value
+  if (!ask || ask <= 0) return 0
+  return Math.round(ask * 100)
+}
+
 const handleKeydown = (e) => {
   if (e.code === 'Space' && currentEvent.value && e.target.tagName !== 'INPUT') {
     e.preventDefault()
@@ -163,43 +191,46 @@ const openSubMarket = (sub) => {
   })
 }
 
-const handlePlaceOrder = async (side, priceCents) => {
-  if (side === 'SELL') return
+/**
+ * Build and POST /order. Shared by ladder clicks and Fast presets.
+ */
+const submitBuyOrder = async ({
+  priceCents,
+  strategy,
+  riskPercent,
+  takeProfitPrice,
+  stopLossPrice,
+  bankroll,
+}) => {
+  if (!activeSubMarket.value) return
+  if (!priceCents || priceCents < 1 || priceCents > 99) {
+    toast.error('❌ No valid ask price')
+    return
+  }
 
   const targetToken =
-    activeTeam.value === 1 ? activeSubMarket.value.token_id_yes : activeSubMarket.value.token_id_no
-
-  let finalTpCents = null
-  let finalSlCents = null
-  let finalStrategy = 'custom'
-
-  if (marketStore.tradingMode === 'custom') {
-    finalTpCents = marketStore.tpOffset > 0 ? priceCents + Number(marketStore.tpOffset) : null
-    finalSlCents = marketStore.slOffset > 0 ? priceCents - Number(marketStore.slOffset) : null
-  } else {
-    finalStrategy = marketStore.activePreset
-    finalTpCents = priceCents + (marketStore.activePreset === '4c' ? 4 : 8)
-    finalSlCents = priceCents - 12
-  }
+    activeTeam.value === 1
+      ? activeSubMarket.value.token_id_yes
+      : activeSubMarket.value.token_id_no
 
   const reqBody = {
     token_id: targetToken,
     condition_id: activeSubMarket.value.condition_id,
     price: priceCents / 100.0,
     side: 'BUY',
-    bankroll: Number(marketStore.tradeSize),
-    risk_percent: 100,
+    bankroll: Number(bankroll),
+    risk_percent: Number(riskPercent),
     is_custom_limit: true,
-    take_profit_price: finalTpCents ? Math.min(0.99, finalTpCents / 100.0) : null,
-    stop_loss_price: finalSlCents ? Math.max(0.01, finalSlCents / 100.0) : null,
-    strategy: finalStrategy,
+    take_profit_price: takeProfitPrice,
+    stop_loss_price: stopLossPrice,
+    strategy,
   }
 
   try {
     toast.info('Transmitting order...')
     const data = await tradeApi.placeOrder(reqBody)
     if (data.success) {
-      toast.success(`✅ FILLED ${priceCents}¢`)
+      toast.success(`✅ FILLED ${priceCents}¢ · ${strategy}`)
       marketStore.loadPositions()
     } else {
       toast.error(`❌ REJECTED: ${data.error}`)
@@ -207,6 +238,94 @@ const handlePlaceOrder = async (side, priceCents) => {
   } catch (e) {
     toast.error(`❌ ${e.message || 'TIMEOUT: Node Unreachable'}`)
   }
+}
+
+const handlePlaceOrder = async (side, priceCents) => {
+  if (side === 'SELL') return
+
+  let finalTpCents = null
+  let finalSlCents = null
+  let finalStrategy = 'custom'
+  let riskPercent = 100
+  let bankroll = Number(marketStore.tradeSize)
+
+  if (marketStore.tradingMode === 'custom') {
+    finalTpCents = marketStore.tpOffset > 0 ? priceCents + Number(marketStore.tpOffset) : null
+    finalSlCents = marketStore.slOffset > 0 ? priceCents - Number(marketStore.slOffset) : null
+  } else {
+    // Fast mode ladder click uses last active preset (defaults to rebound-like offsets)
+    const preset = marketStore.activePreset || 'rebound'
+    finalStrategy = preset
+    if (preset === 'rebound') {
+      riskPercent = 40
+      finalTpCents = priceCents + 3
+      finalSlCents = priceCents - 5
+    } else if (preset === 'partial') {
+      riskPercent = 100
+      finalTpCents = priceCents + 3 // backend expands to dual TP
+      finalSlCents = priceCents - 4
+    } else if (preset === 'result') {
+      riskPercent = 100
+      bankroll = Math.max(Number(marketStore.tradeSize) * 0.05, 5)
+      finalTpCents = null
+      finalSlCents = Math.round(priceCents * 0.5) // entry * 0.5 in cents
+    } else if (preset === 'momentum') {
+      riskPercent = 60
+      finalTpCents = priceCents + 6
+      finalSlCents = priceCents - 3
+    } else {
+      // legacy 4c / 8c
+      finalTpCents = priceCents + (preset === '4c' ? 4 : 8)
+      finalSlCents = priceCents - 12
+    }
+  }
+
+  await submitBuyOrder({
+    priceCents,
+    strategy: finalStrategy,
+    riskPercent,
+    bankroll,
+    takeProfitPrice: finalTpCents != null ? Math.min(0.99, finalTpCents / 100.0) : null,
+    stopLossPrice: finalSlCents != null ? Math.max(0.01, finalSlCents / 100.0) : null,
+  })
+}
+
+/** One-tap preset from TradingPanel — override fields already applied; fire at best ask. */
+const handleRunPreset = async (cfg) => {
+  const priceCents = currentBestAskCents()
+  if (!priceCents) {
+    toast.error('❌ Wait for book (no best ask)')
+    return
+  }
+
+  let bankroll = Number(marketStore.tradeSize)
+  let riskPercent = cfg.riskPercent != null ? cfg.riskPercent : 100
+  let takeProfitPrice = null
+  let stopLossPrice = null
+
+  if (cfg.resultHold || cfg.strategy === 'result') {
+    // Size = max(5% of bankroll, $5)
+    bankroll = Math.max(Number(marketStore.tradeSize) * 0.05, 5)
+    riskPercent = 100
+    takeProfitPrice = null
+    stopLossPrice = Math.max(0.01, Math.round((priceCents / 100.0) * 0.5 * 100) / 100)
+  } else {
+    if (cfg.tpOffsetCents != null) {
+      takeProfitPrice = Math.min(0.99, (priceCents + Number(cfg.tpOffsetCents)) / 100.0)
+    }
+    if (cfg.slOffsetCents != null) {
+      stopLossPrice = Math.max(0.01, (priceCents - Number(cfg.slOffsetCents)) / 100.0)
+    }
+  }
+
+  await submitBuyOrder({
+    priceCents,
+    strategy: cfg.strategy,
+    riskPercent,
+    bankroll,
+    takeProfitPrice,
+    stopLossPrice,
+  })
 }
 
 const executePanicSell = async (orderId) => {
