@@ -193,9 +193,13 @@ async def panic_sell_position(order_id: str, db: Session = Depends(get_db)):
                 return {"success": True, "message": "Очищено (токен сгорел/рынок закрыт)."}
 
         try:
-            await run_sync(client.cancel_market_orders, asset_id=str(token_id))
-        except Exception:
-            pass
+            if getattr(pos, "tp_order_id", None):
+                logger.info("Отменяем Тейк-Профит %s для разблокировки баланса", pos.tp_order_id)
+                await cancel_order(pos.tp_order_id)
+                await asyncio.sleep(0.5)
+                
+        except Exception as exc:
+            logger.warning("Не удалось отменить ТП перед паникой: %s", exc)
 
         await asyncio.sleep(1.0)
 
