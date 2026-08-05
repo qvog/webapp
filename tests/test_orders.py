@@ -92,8 +92,9 @@ class TestPlaceOrderPriceGuard:
         mock_clob_client: MagicMock,
         mocker,
     ) -> None:
-        # Avoid real background monitor / DB side effects beyond commit path
-        mocker.patch("src.api.trade.monitor_and_manage_position", new=mocker.AsyncMock())
+        # Avoid real background workers / DB side effects beyond commit path
+        mocker.patch("src.api.trade.setup_order_lifecycle", new=mocker.AsyncMock())
+        mocker.patch("src.api.trade.token_sl_radar", new=mocker.AsyncMock())
         mocker.patch(
             "src.api.trade.get_neg_risk_options",
             new=mocker.AsyncMock(

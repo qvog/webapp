@@ -1,4 +1,4 @@
-"""Background position monitor: fill wait → TP order → SL via WebSocket."""
+"""Background position workers: REST lifecycle + singleton SL radar per token."""
 from __future__ import annotations
 
 import asyncio
@@ -17,7 +17,12 @@ from src.api.client import get_clob_client, run_sync
 from src.config import settings
 from src.database.db import SessionLocal
 from src.database.models import Position
-from src.services.orders import cancel_order, market_sell, parse_order_payload
+from src.services.orders import (
+    cancel_order,
+    get_neg_risk_options,
+    market_sell,
+    parse_order_payload,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +32,7 @@ os.environ.setdefault("no_proxy", "ws-subscriptions-clob.polymarket.com")
 
 @contextmanager
 def db_session():
+    """Short-lived session: commit on success, always close (no locks in WS loop)."""
     db = SessionLocal()
     try:
         yield db
@@ -45,6 +51,48 @@ def _update_position(order_id: str, **fields: Any) -> None:
             return
         for key, value in fields.items():
             setattr(pos, key, value)
+
+
+def _get_open_sl_positions(token_id: str) -> list[dict[str, Any]]:
+    """Snapshot open SL positions; values are plain Python (session closed after)."""
+    with db_session() as db:
+        rows = (
+            db.query(Position)
+            .filter(
+                Position.token_id == token_id,
+                Position.status == "OPEN",
+                Position.sl_trigger_price.isnot(None),
+            )
+            .all()
+        )
+        return [
+            {
+                "order_id": p.order_id,
+                "sl_trigger_price": float(p.sl_trigger_price),
+                "size": float(p.size),
+                "strategy": p.strategy or "custom",
+                "tp_order_id": p.tp_order_id,
+            }
+            for p in rows
+        ]
+
+
+def _get_open_tp_positions(token_id: str) -> list[dict[str, Any]]:
+    """Snapshot open positions that have a live TP order id."""
+    with db_session() as db:
+        rows = (
+            db.query(Position)
+            .filter(
+                Position.token_id == token_id,
+                Position.status == "OPEN",
+                Position.tp_order_id.isnot(None),
+            )
+            .all()
+        )
+        return [
+            {"order_id": p.order_id, "tp_order_id": p.tp_order_id}
+            for p in rows
+        ]
 
 
 def _apply_book_snapshot(bids: dict, asks: dict, payload: dict) -> None:
@@ -106,17 +154,17 @@ async def _wait_for_fill(
                     if size_matched and float(size_matched) > 0
                     else original_size
                 )
-                logger.info("[Worker] filled %s size=%s", order_id, size)
+                logger.info("[Lifecycle] filled %s size=%s", order_id, size)
                 _update_position(order_id, status="OPEN", size=size)
                 return size
 
             if status in ("CANCELED", "EXPIRED"):
                 if size_matched and float(size_matched) > 0:
                     size = int(float(size_matched) * 100) / 100.0
-                    logger.warning("[Worker] partial fill on cancel: %s", size)
+                    logger.warning("[Lifecycle] partial fill on cancel: %s", size)
                     _update_position(order_id, status="OPEN", size=size)
                     return size
-                logger.warning("[Worker] order cancelled empty: %s", order_id)
+                logger.warning("[Lifecycle] order cancelled empty: %s", order_id)
                 _update_position(order_id, status="CANCELED")
                 return None
         except Exception:
@@ -150,7 +198,7 @@ async def _place_take_profit(
             )
             if resp and resp.get("success"):
                 tp_id = resp.get("orderID")
-                logger.info("[Worker] TP placed: %s", tp_id)
+                logger.info("[Lifecycle] TP placed: %s", tp_id)
                 return tp_id
         except Exception:
             pass
@@ -168,7 +216,7 @@ async def _seed_order_book(client: Any, token_id: str, bids: dict, asks: dict) -
 
 
 async def _check_tp_status(client: Any, order_id: str, tp_order_id: str) -> bool:
-    """Return True if monitoring should stop (TP filled or market resolved)."""
+    """Return True if position closed via TP fill or market resolve."""
     try:
         tp_info = await run_sync(client.get_order, tp_order_id)
         tp_data = parse_order_payload(tp_info)
@@ -177,7 +225,7 @@ async def _check_tp_status(client: Any, order_id: str, tp_order_id: str) -> bool
 
         status = tp_data.get("status")
         if status in ("MATCHED", "FILLED"):
-            logger.info("[Worker] TP hit for %s", order_id)
+            logger.info("[Radar] TP hit for %s", order_id)
             _update_position(
                 order_id,
                 status="CLOSED_TP",
@@ -185,7 +233,7 @@ async def _check_tp_status(client: Any, order_id: str, tp_order_id: str) -> bool
             )
             return True
         if status in ("CANCELED", "EXPIRED"):
-            logger.info("[Worker] TP cancelled (resolved) for %s", order_id)
+            logger.info("[Radar] TP cancelled (resolved) for %s", order_id)
             _update_position(order_id, status="RESOLVED", exit_price=1.0)
             return True
     except Exception:
@@ -193,37 +241,75 @@ async def _check_tp_status(client: Any, order_id: str, tp_order_id: str) -> bool
     return False
 
 
-async def monitor_and_manage_position(
+async def setup_order_lifecycle(
     order_id: str,
-    entry_price: float,
-    tp_price: float | None,
-    sl_price: float | None,
     original_size: float,
     token_id: str,
+    tp_price: float | None,
+    sl_price: float | None,
     options: PartialCreateOrderOptions,
     strategy: str,
 ) -> None:
-    logger.info("[Worker] watching %s strategy=%s", order_id, strategy.upper())
+    """
+    REST-only lifecycle for a single order (Phase 1–2).
+
+    Waits for fill, marks OPEN, places TP limit, stores tp_order_id, then exits.
+    SL monitoring is owned by the singleton token_sl_radar for this token.
+    """
+    logger.info(
+        "[Lifecycle] start %s strategy=%s sl=%s",
+        order_id,
+        strategy.upper(),
+        sl_price,
+    )
     client = get_clob_client()
 
+    # Phase 1: wait for entry fill
     actual_size = await _wait_for_fill(client, order_id, original_size)
     if not actual_size:
         _update_position(order_id, status="EXPIRED")
         return
 
-    tp_order_id = None
+    # Ensure SL trigger is persisted (radar reads it from DB)
+    if sl_price is not None:
+        _update_position(
+            order_id,
+            sl_trigger_price=max(0.01, round(float(sl_price), 2)),
+        )
+
+    # Phase 2: place Take Profit limit (if configured)
     if tp_price:
         tp_order_id = await _place_take_profit(
             client, token_id, actual_size, tp_price, options
         )
+        if tp_order_id:
+            _update_position(order_id, tp_order_id=tp_order_id)
+        else:
+            logger.error("[Lifecycle] failed to place TP for %s", order_id)
 
-    sell_ratio = 0.5 if strategy == "match" else 1.0
-    sl_trigger = max(0.01, round(float(sl_price or (entry_price - 0.12)), 2))
-    logger.info("[Worker] SL active @ %s for %s", sl_trigger, order_id)
+    logger.info(
+        "[Lifecycle] done %s size=%s (SL radar owns Phase 3)",
+        order_id,
+        actual_size,
+    )
+
+
+async def token_sl_radar(token_id: str) -> None:
+    """
+    Singleton WebSocket worker for one token (Phase 3).
+
+    One connection per token_id. On each book tick, evaluates every OPEN
+    position with an SL independently (per-order confirmation counters).
+    Sequential SL execution is intentional — no order queues.
+    """
+    logger.info("[Radar] starting singleton SL radar for token %s", token_id)
+    client = get_clob_client()
+    options = await get_neg_risk_options(token_id)
 
     bids_book: dict[float, float] = {}
     asks_book: dict[float, float] = {}
-    sl_confirmations = 0
+    # Key: order_id → consecutive ticks where best_bid is at/below SL
+    sl_confirmations: dict[str, int] = {}
     empty_book_count = 0
     last_tp_check = time.time()
 
@@ -245,10 +331,15 @@ async def monitor_and_manage_position(
                 ping_task = asyncio.create_task(ping_loop())
                 try:
                     while True:
+                        # Periodic TP fill / resolve check (preserves original behavior)
                         if time.time() - last_tp_check > 15:
                             last_tp_check = time.time()
-                            if tp_order_id and await _check_tp_status(client, order_id, tp_order_id):
-                                return
+                            for tp_pos in _get_open_tp_positions(token_id):
+                                closed = await _check_tp_status(
+                                    client, tp_pos["order_id"], tp_pos["tp_order_id"]
+                                )
+                                if closed:
+                                    sl_confirmations.pop(tp_pos["order_id"], None)
                             await _seed_order_book(client, token_id, bids_book, asks_book)
 
                         try:
@@ -274,46 +365,94 @@ async def monitor_and_manage_position(
                         if not bids_book and not asks_book:
                             empty_book_count += 1
                             if empty_book_count > 20:
-                                logger.info("[Worker] empty book → RESOLVED %s", order_id)
-                                _update_position(order_id, status="RESOLVED", exit_price=1.0)
-                                return
+                                logger.info(
+                                    "[Radar] empty book → RESOLVED all OPEN on %s",
+                                    token_id,
+                                )
+                                for pos in _get_open_sl_positions(token_id):
+                                    _update_position(
+                                        pos["order_id"],
+                                        status="RESOLVED",
+                                        exit_price=1.0,
+                                    )
+                                sl_confirmations.clear()
+                                empty_book_count = 0
                             continue
                         empty_book_count = 0
 
+                        # --- a. Top of book ---
                         best_bid = max(bids_book) if bids_book else 0
                         best_ask = min(asks_book) if asks_book else 1
+
+                        # --- b. SPREAD PROTECTION (exact: 0.15) ---
                         if best_ask - best_bid > 0.15:
-                            sl_confirmations = 0
+                            sl_confirmations.clear()
                             continue
 
-                        if 0 < best_bid <= sl_trigger:
-                            sl_confirmations += 1
-                            if sl_confirmations < 2:
-                                continue
+                        # --- c. Active OPEN positions with SL for this token ---
+                        positions = _get_open_sl_positions(token_id)
+                        active_ids = {p["order_id"] for p in positions}
+                        # Drop confirmations for positions no longer OPEN
+                        for oid in list(sl_confirmations.keys()):
+                            if oid not in active_ids:
+                                sl_confirmations.pop(oid, None)
 
-                            logger.warning("[Worker] SL hit @ %s for %s", best_bid, order_id)
-                            if tp_order_id:
-                                await cancel_order(tp_order_id)
+                        # --- d. Per-order SL evaluation (independent counters) ---
+                        for pos in positions:
+                            order_id = pos["order_id"]
+                            sl_trigger = pos["sl_trigger_price"]
 
-                            shares = round(actual_size * sell_ratio, 2)
-                            sl_resp = await market_sell(token_id, shares, options)
-
-                            if sl_resp and (
-                                sl_resp.get("success")
-                                or sl_resp.get("orderID")
-                                or sl_resp.get("id")
-                            ):
-                                logger.info("[Worker] SL filled for %s", order_id)
-                                _update_position(
-                                    order_id, status="CLOSED_SL", exit_price=best_bid
+                            if 0 < best_bid <= sl_trigger:
+                                sl_confirmations[order_id] = (
+                                    sl_confirmations.get(order_id, 0) + 1
                                 )
-                            else:
-                                logger.error("[Worker] SL order failed for %s", order_id)
-                            return
+                                # 2-tick confirmation (exact)
+                                if sl_confirmations[order_id] < 2:
+                                    continue
 
-                        sl_confirmations = 0
+                                # TRIGGER FIRED
+                                logger.warning(
+                                    "[Radar] SL hit @ %s for %s (token %s)",
+                                    best_bid,
+                                    order_id,
+                                    token_id,
+                                )
+
+                                tp_order_id = pos.get("tp_order_id")
+                                if tp_order_id:
+                                    await cancel_order(tp_order_id)
+
+                                # match strategy sells half; others full size
+                                sell_ratio = 0.5 if pos["strategy"] == "match" else 1.0
+                                shares_to_sell = round(pos["size"] * sell_ratio, 2)
+
+                                # Sequential market sell; balance auto-correct is inside market_sell
+                                sl_resp = await market_sell(
+                                    token_id, shares_to_sell, options
+                                )
+
+                                if sl_resp and (
+                                    sl_resp.get("success")
+                                    or sl_resp.get("orderID")
+                                    or sl_resp.get("id")
+                                ):
+                                    logger.info("[Radar] SL filled for %s", order_id)
+                                    _update_position(
+                                        order_id,
+                                        status="CLOSED_SL",
+                                        exit_price=best_bid,
+                                    )
+                                    sl_confirmations.pop(order_id, None)
+                                else:
+                                    logger.error(
+                                        "[Radar] SL order failed for %s", order_id
+                                    )
+                                # Continue loop for remaining positions (no queue)
+                            else:
+                                # Price bounced back above SL
+                                sl_confirmations.pop(order_id, None)
                 finally:
                     ping_task.cancel()
         except Exception as exc:
-            logger.debug("[Worker] WS reconnect %s: %s", order_id, exc)
+            logger.debug("[Radar] WS reconnect token %s: %s", token_id, exc)
             await asyncio.sleep(2)

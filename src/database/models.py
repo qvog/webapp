@@ -26,6 +26,7 @@ class Position(Base):
     size = Column(Float, nullable=False)
 
     tp_price = Column(Float, nullable=True)
+    tp_order_id = Column(String, nullable=True)
     sl_trigger_price = Column(Float, nullable=True)
 
     # OPEN | PENDING | CLOSED_TP | CLOSED_SL | PANIC_SELL | CANCELED | RESOLVED | EXPIRED

@@ -11,11 +11,12 @@ from py_clob_client_v2 import PartialCreateOrderOptions
 
 from src.api import markets, trade
 from src.api.client import get_clob_client, run_sync
+from src.api.trade import active_token_radars
 from src.config import settings
-from src.database.db import Base, SessionLocal, engine
+from src.database.db import SessionLocal, ensure_schema
 from src.database.models import Position
 from src.services.market_cache import market_cache
-from src.workers.monitor import monitor_and_manage_position
+from src.workers.monitor import setup_order_lifecycle, token_sl_radar
 
 logging.basicConfig(
     level=logging.INFO,
@@ -23,11 +24,15 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-Base.metadata.create_all(bind=engine)
+ensure_schema()
 
 
 async def restore_open_positions() -> None:
-    """Re-attach monitors for OPEN/PENDING positions after process restart."""
+    """
+    After process restart:
+      - Re-run REST lifecycle for PENDING/OPEN positions (fill wait + TP if needed).
+      - Start one singleton SL radar per distinct token_id.
+    """
     logger.info("[SYSTEM] Restoring open positions...")
     db = SessionLocal()
     try:
@@ -40,28 +45,37 @@ async def restore_open_positions() -> None:
             logger.info("[SYSTEM] No open positions")
             return
 
-        logger.warning("[SYSTEM] Restoring %s workers", len(open_positions))
+        logger.warning("[SYSTEM] Restoring %s positions", len(open_positions))
         client = get_clob_client()
+        tokens_needed: set[str] = set()
 
         for pos in open_positions:
             try:
                 is_neg_risk = await run_sync(client.get_neg_risk, str(pos.token_id))
                 options = PartialCreateOrderOptions(tick_size="0.01", neg_risk=is_neg_risk)
+
+                # Lifecycle: wait for fill (no-op if already filled) + ensure TP exists
                 asyncio.create_task(
-                    monitor_and_manage_position(
+                    setup_order_lifecycle(
                         order_id=pos.order_id,
-                        entry_price=pos.entry_price,
-                        tp_price=pos.tp_price,
-                        sl_price=pos.sl_trigger_price,
                         original_size=pos.size,
                         token_id=pos.token_id,
+                        tp_price=pos.tp_price if not pos.tp_order_id else None,
+                        sl_price=pos.sl_trigger_price,
                         options=options,
                         strategy=pos.strategy,
                     )
                 )
-                logger.info("[SYSTEM] Radar restarted for %s", pos.order_id)
+                tokens_needed.add(str(pos.token_id))
+                logger.info("[SYSTEM] Lifecycle restored for %s", pos.order_id)
             except Exception as exc:
                 logger.error("[SYSTEM] Failed to restore %s: %s", pos.order_id, exc)
+
+        for token_id in tokens_needed:
+            if token_id not in active_token_radars:
+                active_token_radars.add(token_id)
+                asyncio.create_task(token_sl_radar(token_id))
+                logger.info("[SYSTEM] SL radar started for token %s", token_id)
     except Exception as exc:
         logger.error("[SYSTEM] Restore failed: %s", exc)
     finally:

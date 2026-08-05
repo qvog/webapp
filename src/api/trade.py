@@ -24,10 +24,13 @@ from src.services.orders import (
     parse_order_payload,
     validate_limit_price,
 )
-from src.workers.monitor import monitor_and_manage_position
+from src.workers.monitor import setup_order_lifecycle, token_sl_radar
 
 router = APIRouter(tags=["trade"])
 logger = logging.getLogger(__name__)
+
+# Singleton guard: at most one SL radar task per token_id
+active_token_radars: set[str] = set()
 
 # Polymarket CLOB limit prices must stay inside the tradable tick band.
 MIN_LIMIT_PRICE = 0.01
@@ -106,18 +109,22 @@ async def place_order(
             else max(0.01, safe_price - 0.12)
         )
 
+        token_id = str(req.token_id)
+
         try:
+            # Always PENDING until setup_order_lifecycle confirms fill → OPEN.
+            # Prevents the token radar from SL-evaluating unfilled entries.
             db.add(
                 Position(
                     order_id=main_order_id,
-                    token_id=str(req.token_id),
+                    token_id=token_id,
                     condition_id=req.condition_id,
                     strategy=strategy,
                     entry_price=safe_price,
                     size=safe_size,
                     tp_price=safe_tp,
                     sl_trigger_price=sl_price,
-                    status="PENDING" if req.is_custom_limit else "OPEN",
+                    status="PENDING",
                 )
             )
             db.commit()
@@ -125,17 +132,26 @@ async def place_order(
             db.rollback()
             logger.warning("DB insert failed for %s: %s", main_order_id, exc)
 
+        # Phase 1–2: per-order REST lifecycle (fill wait + TP placement)
         background_tasks.add_task(
-            monitor_and_manage_position,
+            setup_order_lifecycle,
             order_id=main_order_id,
-            entry_price=safe_price,
+            original_size=safe_size,
+            token_id=token_id,
             tp_price=safe_tp,
             sl_price=sl_price,
-            original_size=safe_size,
-            token_id=str(req.token_id),
             options=options,
             strategy=strategy,
         )
+
+        # Phase 3: singleton WS radar per token (shared by all orders on that token)
+        if token_id not in active_token_radars:
+            active_token_radars.add(token_id)
+            background_tasks.add_task(token_sl_radar, token_id)
+            logger.info("[Trade] started SL radar for token %s", token_id)
+        else:
+            logger.info("[Trade] SL radar already running for token %s", token_id)
+
         return {"success": True, "order_id": main_order_id}
 
     except Exception as exc:
