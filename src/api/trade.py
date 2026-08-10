@@ -460,6 +460,7 @@ async def panic_sell_position(order_id: str, db: Session = Depends(get_db)):
                 pos.status = "PANIC_SELL"
                 pos.exit_price = bid
                 db.commit()
+                order_audit.info(f"PANIC SELL EXECUTED | order_id={order_id} size_dumped={size_to_sell} exit_price={bid}")
                 return {"success": True, "message": "Сброшено по рынку!"}
 
             if resp and is_resolved_error(str(resp)):

@@ -204,8 +204,7 @@ async def _wait_for_fill(
                     logger.warning("[Lifecycle] partial fill on cancel: %s", size)
                     _update_position(order_id, status="OPEN", size=size)
                     order_audit.info(
-                        "FILLED/OPEN (partial) | order_id=%s token_id=%s size=%s "
-                        "strategy=%s",
+                        "FILLED/OPEN (partial) | order_id=%s token_id=%s size=%s strategy=%s",
                         order_id,
                         token_id,
                         size,
@@ -231,6 +230,8 @@ async def _place_take_profit(
 ) -> str | None:
     size = round(float(size), 2)
     tp_price = round(float(tp_price), 2)
+    last_error = None
+    
     for _ in range(attempts):
         try:
             args = OrderArgs(
@@ -250,17 +251,20 @@ async def _place_take_profit(
                 tp_id = resp.get("orderID")
                 logger.info("[Lifecycle] TP placed: %s @ %s size=%s", tp_id, tp_price, size)
                 return tp_id
+            
             # Some responses omit success but still return orderID
             if isinstance(resp, dict):
                 tp_id = resp.get("orderID") or resp.get("id")
                 if tp_id:
-                    logger.info(
-                        "[Lifecycle] TP placed: %s @ %s size=%s", tp_id, tp_price, size
-                    )
+                    logger.info("[Lifecycle] TP placed: %s @ %s size=%s", tp_id, tp_price, size)
                     return tp_id
-        except Exception:
-            pass
+                last_error = resp.get("errorMsg", str(resp))
+        except Exception as exc:
+            last_error = str(exc)
+            
         await asyncio.sleep(2)
+        
+    order_audit.error(f"TP PLACEMENT FAILED | size={size} price={tp_price} error={last_error}")
     return None
 
 
@@ -327,64 +331,52 @@ async def _place_draft_early_tps(
 ) -> None:
     """
     draft_early: two sequential REST take-profits.
-      TP1: 50% @ entry + 0.06
-      TP2: remaining 50% @ entry + 0.12
-    Store both ids as comma-separated tp_order_id.
     """
     entry = round(float(entry_price), 2)
     size = round(float(actual_size), 2)
-    tp1_size = round(size * 0.5, 2)
-    tp2_size = round(size - tp1_size, 2)
+    
+    if size < 10.0:
+        logger.warning(f"[Lifecycle] Size {size} is too small to split. Placing single TP.")
+        tp1_size = size
+        tp2_size = 0.0
+    else:
+        tp1_size = round(size * 0.5, 2)
+        tp2_size = round(size - tp1_size, 2)
+    
     tp1_price = round(entry + 0.06, 2)
     tp2_price = round(entry + 0.12, 2)
-    # Clamp into tradable band
+    
     tp1_price = max(0.01, min(0.99, tp1_price))
     tp2_price = max(0.01, min(0.99, tp2_price))
 
     tp_ids: list[str] = []
 
     if tp1_size > 0:
-        tp1_id = await _place_take_profit(
-            client, token_id, tp1_size, tp1_price, options
-        )
+        tp1_id = await _place_take_profit(client, token_id, tp1_size, tp1_price, options)
         if tp1_id:
             tp_ids.append(tp1_id)
             order_audit.info(
-                "TP placed | order_id=%s token_id=%s tp_order_id=%s "
-                "size=%s price=%s strategy=%s leg=1",
-                order_id,
-                token_id,
-                tp1_id,
-                tp1_size,
-                tp1_price,
-                strategy,
+                "TP PLACED | order_id=%s token_id=%s tp_order_id=%s size=%s price=%s strategy=%s leg=1",
+                order_id, token_id, tp1_id, tp1_size, tp1_price, strategy,
             )
         else:
-            logger.error("[Lifecycle] draft_early TP1 failed for %s", order_id)
+            order_audit.error("TP1 FAILED | order_id=%s strategy=%s size=%s price=%s", order_id, strategy, tp1_size, tp1_price)
 
     if tp2_size > 0:
-        tp2_id = await _place_take_profit(
-            client, token_id, tp2_size, tp2_price, options
-        )
+        tp2_id = await _place_take_profit(client, token_id, tp2_size, tp2_price, options)
         if tp2_id:
             tp_ids.append(tp2_id)
             order_audit.info(
-                "TP placed | order_id=%s token_id=%s tp_order_id=%s "
-                "size=%s price=%s strategy=%s leg=2",
-                order_id,
-                token_id,
-                tp2_id,
-                tp2_size,
-                tp2_price,
-                strategy,
+                "TP PLACED | order_id=%s token_id=%s tp_order_id=%s size=%s price=%s strategy=%s leg=2",
+                order_id, token_id, tp2_id, tp2_size, tp2_price, strategy,
             )
         else:
-            logger.error("[Lifecycle] draft_early TP2 failed for %s", order_id)
+            order_audit.error("TP2 FAILED | order_id=%s strategy=%s size=%s price=%s", order_id, strategy, tp2_size, tp2_price)
 
     if tp_ids:
         _update_position(order_id, tp_order_id=",".join(tp_ids))
     else:
-        logger.error("[Lifecycle] draft_early: no TP legs placed for %s", order_id)
+        order_audit.error("DRAFT_EARLY FATAL | No TP legs placed for %s", order_id)
 
 
 async def setup_order_lifecycle(
