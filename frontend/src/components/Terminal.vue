@@ -66,6 +66,9 @@
             :ladderYes="ladderYes"
             :ladderNo="ladderNo"
             :currentTokenId="activeTeam === 1 ? activeSubMarket.token_id_yes : activeSubMarket.token_id_no"
+            :imbalancePercent="activeImbalance"
+            :maxBidSize="activeMaxBidSize"
+            :maxAskSize="activeMaxAskSize"
             @placeOrder="handlePlaceOrder"
           />
         </div>
@@ -139,6 +142,12 @@ const {
   bestBidNo,
   bestAskYes,
   bestAskNo,
+  imbalanceYes,
+  imbalanceNo,
+  maxBidSizeYes,
+  maxAskSizeYes,
+  maxBidSizeNo,
+  maxAskSizeNo,
   isConnecting,
   connectToMarket,
   disconnect,
@@ -181,6 +190,16 @@ const activeSpreadCents = computed(() => {
   const sp = activeTeam.value === 1 ? spreadYes.value : spreadNo.value
   return Math.round(sp * 100)
 })
+
+const activeImbalance = computed(() =>
+  activeTeam.value === 1 ? imbalanceYes.value : imbalanceNo.value
+)
+const activeMaxBidSize = computed(() =>
+  activeTeam.value === 1 ? maxBidSizeYes.value : maxBidSizeNo.value
+)
+const activeMaxAskSize = computed(() =>
+  activeTeam.value === 1 ? maxAskSizeYes.value : maxAskSizeNo.value
+)
 
 const spreadBadgeClass = computed(() => {
   const cents = activeSpreadCents.value
@@ -276,6 +295,19 @@ function buildOrderPayload(priceDollars, strategyOverride = null) {
 }
 
 const handleKeydown = (e) => {
+  // Ctrl+Z / Meta+Z → undo last placed order (panic_sell)
+  if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z') && !e.shiftKey) {
+    // Don't hijack undo inside text fields
+    const tag = (e.target && e.target.tagName) || ''
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || e.target?.isContentEditable) {
+      return
+    }
+    e.preventDefault()
+    e.stopPropagation()
+    executeUndoLastOrder()
+    return
+  }
+
   // Space → scroll to spread (existing)
   if (e.code === 'Space' && currentEvent.value && e.target.tagName !== 'INPUT' && e.target.tagName !== 'SELECT' && e.target.tagName !== 'TEXTAREA') {
     e.preventDefault()
@@ -363,6 +395,7 @@ const handlePlaceOrder = async (side, priceCents) => {
     toast.info('Transmitting order...')
     const data = await tradeApi.placeOrder(reqBody)
     if (data.success) {
+      if (data.order_id) marketStore.setLastPlacedOrderId(data.order_id)
       toast.success(`✅ FILLED ${priceCents}¢ · ${reqBody.strategy}`)
       marketStore.loadPositions()
     } else {
@@ -394,6 +427,7 @@ const confirmAllIn = async () => {
     // Ensure bankroll is current volume; backend takes 50%
     const data = await tradeApi.placeOrder(reqBody)
     if (data.success) {
+      if (data.order_id) marketStore.setLastPlacedOrderId(data.order_id)
       toast.success(`✅ ALL IN HALF @ ${Math.round(price * 100)}¢`)
       marketStore.loadPositions()
       showAllInModal.value = false
@@ -404,6 +438,24 @@ const confirmAllIn = async () => {
     toast.error(`❌ ${e.message || 'TIMEOUT: Node Unreachable'}`)
   } finally {
     allInBusy.value = false
+  }
+}
+
+const executeUndoLastOrder = async () => {
+  if (!marketStore.lastPlacedOrderId) {
+    toast.info('No last order to undo', { timeout: 1200 })
+    return
+  }
+  try {
+    toast.warning('↩ Undo last order...')
+    const data = await marketStore.undoLastOrder()
+    if (data.success) {
+      toast.success('Last order canceled')
+    } else if (!data.skipped) {
+      toast.error(`❌ Undo: ${data.error}`)
+    }
+  } catch (e) {
+    toast.error(`❌ ${e.message || 'Undo failed'}`)
   }
 }
 
@@ -437,6 +489,9 @@ const executePanicSell = async (orderId) => {
     toast.warning('⚡ Market Dump Initiation...')
     const data = await tradeApi.panicSell(orderId)
     if (data.success) {
+      if (marketStore.lastPlacedOrderId === orderId) {
+        marketStore.clearLastPlacedOrderId()
+      }
       toast.success(`✅ ${data.message}`)
       marketStore.loadPositions()
     } else {

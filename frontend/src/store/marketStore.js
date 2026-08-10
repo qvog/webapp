@@ -19,6 +19,9 @@ export const useMarketStore = defineStore('market', {
     /** @deprecated legacy alias — prefer activeStrategy */
     activePreset: 'custom',
 
+    /** Most recent successfully placed order id (Ctrl+Z undo target) */
+    lastPlacedOrderId: null,
+
     isLoadingMarkets: false,
     activeCategory: 'most_traded',
     activeSubcategory: 'all',
@@ -166,6 +169,42 @@ export const useMarketStore = defineStore('market', {
         if (data && data.success) this.openPositions = data.positions || []
       } catch {
         /* keep last known positions on transient errors */
+      }
+    },
+
+    /** Remember last successful /order id for Ctrl+Z undo. */
+    setLastPlacedOrderId(orderId) {
+      this.lastPlacedOrderId = orderId || null
+    },
+
+    clearLastPlacedOrderId() {
+      this.lastPlacedOrderId = null
+    },
+
+    /**
+     * Ctrl+Z: panic-sell / cancel the last placed order.
+     * @returns {Promise<{success:boolean, message?:string, error?:string, skipped?:boolean}>}
+     */
+    async undoLastOrder() {
+      const orderId = this.lastPlacedOrderId
+      if (!orderId) {
+        return { success: false, skipped: true, error: 'No last order to undo' }
+      }
+      try {
+        const data = await tradeApi.panicSell(orderId)
+        // Always clear so we don't double-fire on the same id
+        this.lastPlacedOrderId = null
+        if (data && data.success) {
+          await this.loadPositions()
+          return { success: true, message: data.message || 'Last order canceled' }
+        }
+        return {
+          success: false,
+          error: (data && data.error) || 'Undo failed',
+        }
+      } catch (e) {
+        this.lastPlacedOrderId = null
+        return { success: false, error: e.message || 'Undo failed' }
       }
     },
 

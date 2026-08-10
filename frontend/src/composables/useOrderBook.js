@@ -28,7 +28,65 @@ export function useOrderBook() {
   const bestAskYes = ref(1)
   const bestBidNo = ref(0)
   const bestAskNo = ref(1)
+  /** Top-3 bid share of top-3 depth: (sumBids / (sumBids+sumAsks)) * 100 */
+  const imbalanceYes = ref(50)
+  const imbalanceNo = ref(50)
+  /** Max sizes across the full ladder (heatmap 100% baseline) */
+  const maxBidSizeYes = ref(0)
+  const maxAskSizeYes = ref(0)
+  const maxBidSizeNo = ref(0)
+  const maxAskSizeNo = ref(0)
   const isConnecting = ref(false)
+
+  /**
+   * Book depth metrics for one ladder (99 levels, price 99→1).
+   * - Top-3 bids: highest prices with bidSize > 0
+   * - Top-3 asks: lowest prices with askSize > 0
+   * - imbalancePercent = (sumBids / (sumBids + sumAsks)) * 100
+   * - max_bid_size / max_ask_size across all levels
+   */
+  const calcBookMetrics = (ladder) => {
+    let bB = 0
+    let bA = 1
+    let maxBid = 0
+    let maxAsk = 0
+    const topBidSizes = []
+    const topAskSizes = []
+
+    // Ladder index 0 = 99¢, index 98 = 1¢
+    for (let i = 0; i < 99; i++) {
+      const bid = ladder[i].bidSize || 0
+      const ask = ladder[i].askSize || 0
+      if (bid > maxBid) maxBid = bid
+      if (ask > maxAsk) maxAsk = ask
+      if (bid > 0 && ladder[i].price / 100 > bB) bB = ladder[i].price / 100
+      if (ask > 0 && ladder[i].price / 100 < bA) bA = ladder[i].price / 100
+    }
+    if (bA === 1) bA = 0
+
+    // Top-3 bid levels (best = highest price first)
+    for (let i = 0; i < 99 && topBidSizes.length < 3; i++) {
+      if (ladder[i].bidSize > 0) topBidSizes.push(ladder[i].bidSize)
+    }
+    // Top-3 ask levels (best = lowest price first)
+    for (let i = 98; i >= 0 && topAskSizes.length < 3; i--) {
+      if (ladder[i].askSize > 0) topAskSizes.push(ladder[i].askSize)
+    }
+
+    const sumBids = topBidSizes.reduce((a, b) => a + b, 0)
+    const sumAsks = topAskSizes.reduce((a, b) => a + b, 0)
+    const total = sumBids + sumAsks
+    const imbalancePercent = total > 0 ? (sumBids / total) * 100 : 50
+
+    return {
+      bB,
+      bA,
+      sp: Math.max(0, bA - bB),
+      imbalancePercent,
+      maxBidSize: maxBid,
+      maxAskSize: maxAsk,
+    }
+  }
 
   let ws = null
   let watchdogInterval = null
@@ -170,26 +228,23 @@ export function useOrderBook() {
         toast.success('⚡ Connected', { timeout: 1200 })
       }
 
-      // Metrics loop
+      // Metrics loop (spread + imbalance + heatmap baselines)
       metricsLoop = setInterval(() => {
-        const calcMetrics = (ladder) => {
-          let bB = 0
-          let bA = 1
-          for (let i = 0; i < 99; i++) {
-            if (ladder[i].bidSize > 0 && ladder[i].price / 100 > bB) bB = ladder[i].price / 100
-            if (ladder[i].askSize > 0 && ladder[i].price / 100 < bA) bA = ladder[i].price / 100
-          }
-          if (bA === 1) bA = 0
-          return { bB, bA, sp: Math.max(0, bA - bB) }
-        }
-        const mY = calcMetrics(ladderYes)
+        const mY = calcBookMetrics(ladderYes)
         bestBidYes.value = mY.bB
         bestAskYes.value = mY.bA
         spreadYes.value = mY.sp
-        const mN = calcMetrics(ladderNo)
+        imbalanceYes.value = mY.imbalancePercent
+        maxBidSizeYes.value = mY.maxBidSize
+        maxAskSizeYes.value = mY.maxAskSize
+
+        const mN = calcBookMetrics(ladderNo)
         bestBidNo.value = mN.bB
         bestAskNo.value = mN.bA
         spreadNo.value = mN.sp
+        imbalanceNo.value = mN.imbalancePercent
+        maxBidSizeNo.value = mN.maxBidSize
+        maxAskSizeNo.value = mN.maxAskSize
       }, 100)
     }
 
@@ -279,8 +334,16 @@ export function useOrderBook() {
     bestAskYes,
     bestBidNo,
     bestAskNo,
+    imbalanceYes,
+    imbalanceNo,
+    maxBidSizeYes,
+    maxAskSizeYes,
+    maxBidSizeNo,
+    maxAskSizeNo,
     isConnecting,
     connectToMarket,
     disconnect,
+    /** Pure helper — also used by tests / offline UI if needed */
+    calcBookMetrics,
   }
 }
