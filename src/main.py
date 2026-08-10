@@ -55,6 +55,7 @@ async def restore_open_positions() -> None:
                 options = PartialCreateOrderOptions(tick_size="0.01", neg_risk=is_neg_risk)
 
                 # Lifecycle: wait for fill (no-op if already filled) + ensure TP exists
+                # For draft_early, dual TPs are rebuilt from entry when tp_order_id is missing
                 asyncio.create_task(
                     setup_order_lifecycle(
                         order_id=pos.order_id,
@@ -64,6 +65,7 @@ async def restore_open_positions() -> None:
                         sl_price=pos.sl_trigger_price,
                         options=options,
                         strategy=pos.strategy,
+                        entry_price=pos.entry_price,
                     )
                 )
                 tokens_needed.add(str(pos.token_id))

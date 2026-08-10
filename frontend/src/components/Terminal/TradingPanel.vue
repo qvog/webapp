@@ -1,5 +1,5 @@
 <template>
-  <div class="w-64 flex flex-col gap-3 shrink-0">
+  <div class="w-64 flex flex-col gap-3 shrink-0" tabindex="-1" ref="panelRoot">
     <div class="border border-zinc-800/60 rounded-2xl bg-[#0a0a0a]/80 backdrop-blur-sm p-4 shrink-0 shadow-lg">
       <div class="flex items-center gap-3 mb-5">
         <button @click="$emit('close')" class="text-zinc-500 hover:text-[#00e5ff] transition-colors">
@@ -12,34 +12,39 @@
         </h3>
       </div>
 
-      <div class="flex justify-between items-center mb-4">
-        <span class="font-bold text-zinc-500 text-[10px] uppercase tracking-widest">Strategy</span>
-        <div class="flex rounded border border-zinc-800 bg-[#050505] p-0.5">
-          <button
-            @click="marketStore.tradingMode = 'custom'"
-            :class="modeBtnClass('custom')"
+      <div class="mb-4">
+        <label class="block text-[10px] text-zinc-500 mb-1.5 uppercase tracking-widest">
+          Strategy
+        </label>
+        <select
+          :value="marketStore.activeStrategy"
+          @change="onStrategyChange"
+          class="w-full border border-zinc-800 rounded-lg px-3 py-2 text-sm font-bold outline-none focus:border-[#00e5ff] bg-[#050505] text-white transition-all appearance-none cursor-pointer"
+        >
+          <option
+            v-for="opt in strategyOptions"
+            :key="opt.value"
+            :value="opt.value"
           >
-            Cust
-          </button>
-          <button
-            @click="marketStore.tradingMode = 'presets'"
-            :class="modeBtnClass('presets')"
-          >
-            Fast
-          </button>
-        </div>
+            {{ opt.label }}
+          </option>
+        </select>
+        <p class="mt-1.5 text-[9px] text-zinc-600 font-mono tracking-wide">
+          F1–F4 presets · F5 all-in · F10 flatten
+        </p>
       </div>
 
       <div class="mb-4">
         <label class="block text-[10px] text-zinc-500 mb-1.5 uppercase tracking-widest">Volume (USDC)</label>
         <input
+          ref="volumeInput"
           v-model="marketStore.tradeSize"
           type="number"
           class="w-full border border-zinc-800 rounded-lg px-3 py-2 text-sm font-bold outline-none focus:border-[#00e5ff] bg-[#050505] text-white transition-all"
         />
       </div>
 
-      <div v-if="marketStore.tradingMode === 'custom'" class="flex gap-2">
+      <div v-if="marketStore.activeStrategy === 'custom'" class="flex gap-2">
         <div class="flex-1">
           <label class="block text-[10px] text-zinc-500 mb-1.5 uppercase tracking-widest">TP (¢)</label>
           <input
@@ -56,6 +61,13 @@
             class="w-full border border-zinc-800 rounded-lg px-2 py-2 text-sm font-bold outline-none focus:border-indigo-400 bg-[#050505] text-indigo-400 transition-all"
           />
         </div>
+      </div>
+
+      <div
+        v-else
+        class="rounded-lg border border-zinc-800/80 bg-[#050505] px-3 py-2 text-[10px] text-zinc-500 font-mono leading-relaxed"
+      >
+        {{ presetHint }}
       </div>
     </div>
 
@@ -83,6 +95,7 @@
 </template>
 
 <script setup>
+import { computed, ref } from 'vue'
 import { useMarketStore } from '../../store/marketStore'
 
 defineProps({
@@ -92,14 +105,47 @@ defineProps({
 defineEmits(['close', 'select-sub'])
 
 const marketStore = useMarketStore()
+const panelRoot = ref(null)
+const volumeInput = ref(null)
 
-function modeBtnClass(mode) {
-  const on = marketStore.tradingMode === mode
-  return [
-    'px-2.5 py-1 text-[10px] font-bold rounded transition-colors uppercase tracking-wider',
-    on
-      ? 'bg-[#00e5ff] text-black shadow-[0_0_10px_rgba(0,229,255,0.3)]'
-      : 'text-zinc-500 hover:text-zinc-300',
-  ]
+const strategyOptions = [
+  { value: 'custom', label: 'Custom' },
+  { value: 'draft_early', label: 'Draft Early (F1)' },
+  { value: 'draft_win', label: 'Draft Win (F2)' },
+  { value: 'short_range', label: 'Short Range (F3)' },
+  { value: 'high_range', label: 'High Range (F4)' },
+  { value: 'all_in_half', label: 'All In Half (F5)' },
+]
+
+const PRESET_HINTS = {
+  draft_early: 'TP split +6¢ / +12¢ · SL −6¢ after 16m',
+  draft_win: 'No TP · No SL — hold to resolve',
+  short_range: 'TP +4¢ · SL −6¢ · 3-tick SL',
+  high_range: 'TP +6¢ · SL −8¢ · 3-tick SL',
+  all_in_half: '50% bankroll · No TP/SL (confirm F5)',
 }
+
+const presetHint = computed(
+  () => PRESET_HINTS[marketStore.activeStrategy] || 'Preset — TP/SL set by backend'
+)
+
+function applyStrategy(strategy, volume = null) {
+  marketStore.activeStrategy = strategy
+  marketStore.activePreset = strategy
+  marketStore.tradingMode = strategy === 'custom' ? 'custom' : 'presets'
+  if (volume != null) marketStore.tradeSize = volume
+}
+
+function onStrategyChange(e) {
+  applyStrategy(e.target.value)
+}
+
+/** Focus terminal panel after hotkey preset switch */
+function focusTerminal() {
+  panelRoot.value?.focus?.()
+  // Prefer volume field so user can immediately adjust size
+  volumeInput.value?.focus?.()
+}
+
+defineExpose({ applyStrategy, focusTerminal, panelRoot })
 </script>

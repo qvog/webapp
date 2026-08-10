@@ -14,7 +14,10 @@ export const useMarketStore = defineStore('market', {
     tradeSize: 10,
     tpOffset: 5,
     slOffset: 15,
-    activePreset: '4c',
+    /** Active strategy key: custom | draft_early | draft_win | short_range | high_range | all_in_half */
+    activeStrategy: 'custom',
+    /** @deprecated legacy alias — prefer activeStrategy */
+    activePreset: 'custom',
 
     isLoadingMarkets: false,
     activeCategory: 'most_traded',

@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from src.api.client import get_clob_client, run_sync
 from src.config import settings
+from src.core.order_logger import order_audit
 from src.database.db import get_db
 from src.database.models import Position
 from src.services.orders import (
@@ -36,6 +37,17 @@ active_token_radars: set[str] = set()
 MIN_LIMIT_PRICE = 0.01
 MAX_LIMIT_PRICE = 0.99
 
+# Known strategy identifiers (presets + custom)
+PRESET_STRATEGIES = frozenset(
+    {
+        "draft_early",
+        "draft_win",
+        "short_range",
+        "high_range",
+        "all_in_half",
+    }
+)
+
 
 class TradeRequest(BaseModel):
     token_id: str
@@ -55,6 +67,70 @@ class TradeRequest(BaseModel):
         validate_limit_price(value)
         return value
 
+    @field_validator("strategy")
+    @classmethod
+    def strategy_known(cls, value: str) -> str:
+        s = (value or "custom").strip().lower()
+        # Allow custom + presets + legacy strings still used by older clients
+        allowed = PRESET_STRATEGIES | {"custom", "4c", "8c", "match"}
+        if s not in allowed:
+            # Soft-accept unknown strategies as custom labels for forward compat
+            return s
+        return s
+
+
+def resolve_strategy_levels(
+    strategy: str,
+    entry: float,
+    req_tp: float | None,
+    req_sl: float | None,
+) -> tuple[float | None, float | None]:
+    """
+    Compute TP / SL for known presets on the backend (all values rounded to 2dp).
+
+    Presets ignore client-supplied TP/SL to avoid floating-point drift.
+    Custom / legacy strategies honour request fields (with default SL fallback).
+    """
+    entry = round(float(entry), 2)
+    strategy = (strategy or "custom").lower()
+
+    if strategy == "draft_early":
+        # Dual TPs are placed by monitor after fill; only SL is stored on the position
+        return None, round(entry - 0.06, 2)
+
+    if strategy == "draft_win":
+        return None, None
+
+    if strategy == "short_range":
+        return round(entry + 0.04, 2), round(entry - 0.06, 2)
+
+    if strategy == "high_range":
+        return round(entry + 0.06, 2), round(entry - 0.08, 2)
+
+    if strategy == "all_in_half":
+        return None, None
+
+    # custom + legacy (4c / 8c / match / …)
+    tp = round(float(req_tp), 2) if req_tp is not None else None
+    if req_sl is not None:
+        sl = round(float(req_sl), 2)
+    else:
+        sl = max(0.01, round(entry - 0.12, 2))
+    return tp, sl
+
+
+def _clamp_price(price: float | None) -> float | None:
+    if price is None:
+        return None
+    return max(MIN_LIMIT_PRICE, min(MAX_LIMIT_PRICE, round(float(price), 2)))
+
+
+def _split_tp_ids(tp_order_id: str | None) -> list[str]:
+    """Parse comma-separated tp_order_id field into individual ids."""
+    if not tp_order_id:
+        return []
+    return [part.strip() for part in str(tp_order_id).split(",") if part.strip()]
+
 
 @router.post("/order")
 async def place_order(
@@ -70,14 +146,49 @@ async def place_order(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     side_const = BUY if req.side.upper() == "BUY" else SELL
-    strategy = req.strategy
+    strategy = (req.strategy or "custom").lower()
 
     if req.bankroll < 5.00:
         return {"success": False, "error": f"Банкролл ({req.bankroll}$) меньше $5."}
 
-    target_invest = req.bankroll * (req.risk_percent / 100)
-    actual_invest = min(req.bankroll, max(5.00, target_invest))
+    # Size: all_in_half overrides to 50% of bankroll; otherwise risk_percent
+    if strategy == "all_in_half":
+        actual_invest = round(float(req.bankroll) * 0.5, 2)
+    else:
+        target_invest = req.bankroll * (req.risk_percent / 100)
+        actual_invest = min(req.bankroll, max(5.00, target_invest))
+
+    if actual_invest <= 0:
+        return {"success": False, "error": "Размер позиции должен быть > 0."}
+
     safe_size = round(actual_invest / safe_price, 2)
+
+    # Backend-owned TP/SL for presets (rounded to 2dp)
+    raw_tp, raw_sl = resolve_strategy_levels(
+        strategy,
+        safe_price,
+        req.take_profit_price,
+        req.stop_loss_price,
+    )
+    safe_tp = _clamp_price(raw_tp)
+    # SL may be below 0.01 after subtract — clamp to tradable floor when set
+    if raw_sl is not None:
+        sl_price = max(0.01, round(float(raw_sl), 2))
+    else:
+        sl_price = None
+
+    order_audit.info(
+        "INTENT place_order | strategy=%s token_id=%s size=%s price=%s "
+        "tp=%s sl=%s bankroll=%s invest=%s",
+        strategy,
+        req.token_id,
+        safe_size,
+        safe_price,
+        safe_tp,
+        sl_price,
+        req.bankroll,
+        actual_invest,
+    )
 
     try:
         client = get_clob_client()
@@ -100,14 +211,16 @@ async def place_order(
         main_order_id = extract_order_id(resp)
         if not main_order_id:
             err_msg = resp.get("errorMsg", str(resp)) if isinstance(resp, dict) else str(resp)
+            order_audit.error(
+                "ERROR place_order no order_id | strategy=%s token_id=%s size=%s "
+                "price=%s detail=%s",
+                strategy,
+                req.token_id,
+                safe_size,
+                safe_price,
+                err_msg,
+            )
             return {"success": False, "error": err_msg}
-
-        safe_tp = round(float(req.take_profit_price), 2) if req.take_profit_price else None
-        sl_price = (
-            round(float(req.stop_loss_price), 2)
-            if req.stop_loss_price is not None
-            else max(0.01, safe_price - 0.12)
-        )
 
         token_id = str(req.token_id)
 
@@ -142,6 +255,7 @@ async def place_order(
             sl_price=sl_price,
             options=options,
             strategy=strategy,
+            entry_price=safe_price,
         )
 
         # Phase 3: singleton WS radar per token (shared by all orders on that token)
@@ -156,7 +270,140 @@ async def place_order(
 
     except Exception as exc:
         logger.exception("place_order failed")
+        order_audit.error(
+            "ERROR place_order exception | strategy=%s token_id=%s size=%s "
+            "price=%s error=%s",
+            strategy,
+            req.token_id,
+            safe_size,
+            safe_price,
+            exc,
+        )
         return {"success": False, "error": str(exc)}
+
+
+@router.post("/flatten/{token_id}")
+async def flatten_token(token_id: str, db: Session = Depends(get_db)):
+    """
+    Panic-flatten all OPEN positions for a token (F10).
+
+    - Only status == OPEN (executed buys); PENDING limit entries are ignored.
+    - Cancels associated TP order(s) to unfreeze balance.
+    - Market-sells the summed size once, marks positions PANIC_SELL.
+    """
+    token_id = str(token_id)
+    try:
+        open_positions = (
+            db.query(Position)
+            .filter(
+                Position.token_id == token_id,
+                Position.status == "OPEN",
+            )
+            .all()
+        )
+
+        if not open_positions:
+            return {
+                "success": False,
+                "error": "Нет OPEN позиций по этому токену",
+            }
+
+        total_size = round(sum(float(p.size or 0) for p in open_positions), 2)
+        order_ids = [p.order_id for p in open_positions]
+
+        order_audit.info(
+            "FLATTEN start | token_id=%s positions=%s total_size=%s order_ids=%s",
+            token_id,
+            len(open_positions),
+            total_size,
+            ",".join(order_ids),
+        )
+
+        # Cancel all TP legs (supports comma-separated dual TPs)
+        for pos in open_positions:
+            for tp_id in _split_tp_ids(getattr(pos, "tp_order_id", None)):
+                try:
+                    logger.info(
+                        "[Flatten] cancel TP %s for order %s", tp_id, pos.order_id
+                    )
+                    await cancel_order(tp_id)
+                except Exception as exc:
+                    logger.warning(
+                        "[Flatten] TP cancel failed %s: %s", tp_id, exc
+                    )
+
+        await asyncio.sleep(0.5)
+
+        if total_size <= 0:
+            for pos in open_positions:
+                pos.status = "PANIC_SELL"
+            db.commit()
+            order_audit.info(
+                "FLATTEN done (zero size) | token_id=%s", token_id
+            )
+            return {"success": True, "message": "Позиции закрыты (size=0)."}
+
+        try:
+            options = await get_neg_risk_options(token_id)
+            resp = await market_sell(token_id, total_size, options)
+
+            if resp and extract_order_id(resp):
+                bid = await best_bid_price(token_id)
+                for pos in open_positions:
+                    pos.status = "PANIC_SELL"
+                    pos.exit_price = bid
+                db.commit()
+                order_audit.info(
+                    "FLATTEN executed | token_id=%s total_size=%s exit=%s "
+                    "order_ids=%s",
+                    token_id,
+                    total_size,
+                    bid,
+                    ",".join(order_ids),
+                )
+                return {
+                    "success": True,
+                    "message": f"Flatten: продано {total_size} @ market",
+                    "size": total_size,
+                }
+
+            if resp and is_resolved_error(str(resp)):
+                for pos in open_positions:
+                    pos.status = "RESOLVED"
+                    pos.exit_price = 1.0
+                db.commit()
+                return {"success": True, "message": "Очищено (рынок завершен)."}
+
+            err = str(resp) if resp else "empty response"
+            order_audit.error(
+                "FLATTEN market_sell failed | token_id=%s size=%s detail=%s",
+                token_id,
+                total_size,
+                err,
+            )
+            return {"success": False, "error": f"Ошибка market sell: {err}"}
+
+        except Exception as exc:
+            if is_resolved_error(str(exc)):
+                for pos in open_positions:
+                    pos.status = "RESOLVED"
+                    pos.exit_price = 1.0
+                db.commit()
+                return {"success": True, "message": "Очищено (рынок завершен)."}
+            order_audit.error(
+                "FLATTEN exception | token_id=%s size=%s error=%s",
+                token_id,
+                total_size,
+                exc,
+            )
+            return {"success": False, "error": f"Ошибка Polymarket: {exc}"}
+
+    except Exception as exc:
+        logger.exception("flatten failed")
+        order_audit.error(
+            "FLATTEN internal error | token_id=%s error=%s", token_id, exc
+        )
+        return {"success": False, "error": f"Внутренняя ошибка сервера: {exc}"}
 
 
 @router.post("/panic_sell/{order_id}")
@@ -193,11 +440,12 @@ async def panic_sell_position(order_id: str, db: Session = Depends(get_db)):
                 return {"success": True, "message": "Очищено (токен сгорел/рынок закрыт)."}
 
         try:
+            for tp_id in _split_tp_ids(getattr(pos, "tp_order_id", None)):
+                logger.info("Отменяем Тейк-Профит %s для разблокировки баланса", tp_id)
+                await cancel_order(tp_id)
             if getattr(pos, "tp_order_id", None):
-                logger.info("Отменяем Тейк-Профит %s для разблокировки баланса", pos.tp_order_id)
-                await cancel_order(pos.tp_order_id)
                 await asyncio.sleep(0.5)
-                
+
         except Exception as exc:
             logger.warning("Не удалось отменить ТП перед паникой: %s", exc)
 

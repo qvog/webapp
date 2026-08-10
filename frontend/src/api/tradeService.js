@@ -27,4 +27,11 @@ export const tradeApi = {
       method: 'POST',
     })
   },
+
+  /** F10 flatten: market-sell all OPEN positions for a token */
+  flatten(tokenId) {
+    return apiFetch(`/api/flatten/${encodeURIComponent(tokenId)}`, {
+      method: 'POST',
+    })
+  },
 }
