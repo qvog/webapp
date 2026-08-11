@@ -35,12 +35,14 @@ export const tradeApi = {
     })
   },
 
-  /** Read-only PnL / strategy analytics */
-  getStatsSummary() {
-    return apiFetch('/api/stats/summary')
+  /** Read-only PnL / strategy analytics (period: 24h|7d|30d|90d|1y|all) */
+  getStatsSummary(period = 'all') {
+    const q = new URLSearchParams({ period })
+    return apiFetch(`/api/stats/summary?${q}`)
   },
 
-  getStatsHistory() {
-    return apiFetch('/api/stats/history')
+  getStatsHistory(period = 'all') {
+    const q = new URLSearchParams({ period })
+    return apiFetch(`/api/stats/history?${q}`)
   },
 }

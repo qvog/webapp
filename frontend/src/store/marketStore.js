@@ -209,14 +209,41 @@ export const useMarketStore = defineStore('market', {
     },
 
     getTeamNameFromToken(tokenId) {
+      const meta = this.resolveMarketFromToken(tokenId)
+      return meta.teamName || 'UNKNOWN'
+    },
+
+    /**
+     * Resolve match/event metadata for a CLOB token_id from loaded markets + favorites.
+     * @returns {{ teamName: string|null, title: string|null, image: string|null, question: string|null }}
+     */
+    resolveMarketFromToken(tokenId) {
+      const empty = { teamName: null, title: null, image: null, question: null }
+      if (tokenId == null || tokenId === '') return empty
+      const tid = String(tokenId)
       const allMarkets = [...this.matches, ...this.favorites]
       for (const match of allMarkets) {
         for (const sub of match.sub_markets || []) {
-          if (sub.token_id_yes === tokenId) return sub.out1 || 'YES'
-          if (sub.token_id_no === tokenId) return sub.out2 || 'NO'
+          const yes = sub.token_id_yes != null ? String(sub.token_id_yes) : ''
+          const no = sub.token_id_no != null ? String(sub.token_id_no) : ''
+          if (yes === tid || no === tid) {
+            const teamName =
+              yes === tid ? sub.out1 || 'YES' : sub.out2 || 'NO'
+            return {
+              teamName,
+              title: match.title || null,
+              image: match.image || null,
+              question: sub.question || match.title || null,
+            }
+          }
         }
       }
-      return 'UNKNOWN'
+      return empty
+    },
+
+    /** Event icon URL for a token, or null if unknown. */
+    getImageFromToken(tokenId) {
+      return this.resolveMarketFromToken(tokenId).image || null
     },
   },
 })

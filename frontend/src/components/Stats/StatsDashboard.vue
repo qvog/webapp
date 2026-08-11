@@ -3,22 +3,43 @@
     class="flex-1 flex flex-col min-w-0 h-full overflow-hidden bg-gradient-to-br from-[#000000] via-[#030303] to-[#001012]"
   >
     <!-- Header -->
-    <header class="flex items-center justify-between px-6 py-4 border-b border-zinc-900 shrink-0">
+    <header class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between px-6 py-4 border-b border-zinc-900 shrink-0">
       <div>
         <h1 class="text-lg font-black tracking-widest text-white uppercase">
           Statistics <span class="text-emerald-400">/ PnL</span>
         </h1>
         <p class="text-[10px] text-zinc-500 font-mono uppercase tracking-wider mt-0.5">
-          Closed trades · read-only analytics
+          Closed trades · read-only analytics · {{ periodLabel }}
         </p>
       </div>
-      <button
-        @click="refresh"
-        :disabled="loading"
-        class="px-3 py-1.5 rounded-lg border border-zinc-800 bg-[#0a0a0a] text-[11px] font-mono font-bold uppercase tracking-wider text-[#00e5ff] hover:border-[#00e5ff]/40 hover:bg-[#00e5ff]/5 transition-colors disabled:opacity-40"
-      >
-        {{ loading ? '… Syncing' : '↻ Refresh' }}
-      </button>
+
+      <div class="flex items-center gap-3 flex-wrap">
+        <!-- Time range filter -->
+        <div class="flex items-center gap-1 p-1 rounded-xl border border-zinc-800 bg-[#0a0a0a]">
+          <button
+            v-for="opt in periodOptions"
+            :key="opt.id"
+            type="button"
+            @click="setPeriod(opt.id)"
+            :class="[
+              'px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-colors',
+              period === opt.id
+                ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
+                : 'text-zinc-500 hover:text-zinc-300 border border-transparent',
+            ]"
+          >
+            {{ opt.label }}
+          </button>
+        </div>
+
+        <button
+          @click="refresh"
+          :disabled="loading"
+          class="px-3 py-1.5 rounded-lg border border-zinc-800 bg-[#0a0a0a] text-[11px] font-mono font-bold uppercase tracking-wider text-[#00e5ff] hover:border-[#00e5ff]/40 hover:bg-[#00e5ff]/5 transition-colors disabled:opacity-40"
+        >
+          {{ loading ? '… Syncing' : '↻ Refresh' }}
+        </button>
+      </div>
     </header>
 
     <div class="flex-1 overflow-y-auto custom-scrollbar p-6 space-y-6">
@@ -42,7 +63,7 @@
           >
             {{ formatSigned(overallPnl) }}
           </p>
-          <p class="text-[10px] text-zinc-600 font-mono mt-1">shares · (exit − entry) × size</p>
+          <p class="text-[10px] text-zinc-600 font-mono mt-1">{{ periodLabel }} · (exit − entry) × size</p>
         </div>
 
         <div class="rounded-2xl border border-zinc-800/60 bg-[#0a0a0a]/80 backdrop-blur-sm p-5 shadow-lg">
@@ -93,7 +114,7 @@
         </div>
 
         <div v-if="strategyList.length === 0" class="text-center py-10 text-zinc-600 font-mono text-xs uppercase tracking-widest">
-          No closed trades yet
+          No closed trades in this period
         </div>
 
         <div v-else class="space-y-4">
@@ -149,14 +170,15 @@
       <section class="rounded-2xl border border-zinc-800/60 bg-[#0a0a0a]/80 backdrop-blur-sm shadow-lg flex flex-col min-h-0">
         <div class="flex items-center justify-between px-5 py-4 border-b border-zinc-900 shrink-0">
           <h2 class="text-xs font-bold text-zinc-400 uppercase tracking-widest">Trade History</h2>
-          <span class="text-[10px] text-zinc-600 font-mono">{{ history.length }} closed</span>
+          <span class="text-[10px] text-zinc-600 font-mono">{{ sortedHistory.length }} closed · {{ periodLabel }}</span>
         </div>
 
         <div class="overflow-x-auto custom-scrollbar">
-          <table class="w-full text-left border-collapse min-w-[720px]">
+          <table class="w-full text-left border-collapse min-w-[900px]">
             <thead>
               <tr class="text-[10px] text-zinc-500 uppercase tracking-widest font-bold border-b border-zinc-900">
                 <th class="px-5 py-3 font-bold">Match</th>
+                <th class="px-3 py-3 font-bold whitespace-nowrap">Date / Time</th>
                 <th class="px-3 py-3 font-bold">Strategy</th>
                 <th class="px-3 py-3 font-bold text-right">Size</th>
                 <th class="px-3 py-3 font-bold text-right">Entry</th>
@@ -166,24 +188,55 @@
               </tr>
             </thead>
             <tbody>
-              <tr v-if="history.length === 0">
-                <td colspan="7" class="px-5 py-12 text-center text-zinc-600 font-mono text-xs uppercase tracking-widest">
-                  No closed trades in history
+              <tr v-if="sortedHistory.length === 0">
+                <td colspan="8" class="px-5 py-12 text-center text-zinc-600 font-mono text-xs uppercase tracking-widest">
+                  No closed trades in this period
                 </td>
               </tr>
               <tr
-                v-for="trade in history"
-                :key="trade.order_id"
+                v-for="trade in sortedHistory"
+                :key="trade.order_id || trade.id"
                 class="border-b border-zinc-900/80 hover:bg-white/[0.02] transition-colors"
               >
                 <td class="px-5 py-3">
-                  <span
-                    class="text-sm font-bold text-gray-200 uppercase tracking-wide truncate block max-w-[200px]"
-                    :title="matchLabel(trade.token_id)"
-                  >
-                    {{ matchLabel(trade.token_id) }}
-                  </span>
-                  <span class="text-[10px] text-zinc-600 font-mono">{{ shortId(trade.order_id) }}</span>
+                  <div class="flex items-center gap-2.5 min-w-0 max-w-[320px]">
+                    <img
+                      v-if="matchImage(trade)"
+                      :src="matchImage(trade)"
+                      alt=""
+                      class="w-5 h-5 rounded-full object-cover border border-zinc-800 shrink-0 bg-zinc-900"
+                      @error="onImageError($event)"
+                    />
+                    <div
+                      v-else
+                      class="w-5 h-5 rounded-full bg-zinc-900 border border-zinc-800 shrink-0"
+                    />
+                    <div class="min-w-0 flex-1">
+                      <span
+                        class="text-sm font-bold text-gray-200 tracking-wide truncate block"
+                        :title="matchLabel(trade)"
+                      >
+                        {{ matchLabel(trade) }}
+                      </span>
+                      <span
+                        v-if="matchSubtitle(trade)"
+                        class="text-[10px] text-zinc-500 truncate block"
+                        :title="matchSubtitle(trade)"
+                      >
+                        {{ matchSubtitle(trade) }}
+                      </span>
+                    </div>
+                  </div>
+                </td>
+                <td class="px-3 py-3 whitespace-nowrap">
+                  <div class="flex flex-col">
+                    <span class="text-[12px] font-mono font-bold text-zinc-200">
+                      {{ formatDate(trade) }}
+                    </span>
+                    <span class="text-[10px] font-mono text-zinc-500">
+                      {{ formatTime(trade) }}
+                    </span>
+                  </div>
                 </td>
                 <td class="px-3 py-3">
                   <span class="text-[11px] font-mono font-bold text-zinc-300 uppercase">
@@ -222,12 +275,22 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { apiFetch } from '../../api/http'
 import { useMarketStore } from '../../store/marketStore'
 
 const marketStore = useMarketStore()
 
+const periodOptions = [
+  { id: '24h', label: '24H' },
+  { id: '7d', label: 'Week' },
+  { id: '30d', label: 'Month' },
+  { id: '90d', label: '3M' },
+  { id: '1y', label: 'Year' },
+  { id: 'all', label: 'All' },
+]
+
+const period = ref('30d')
 const loading = ref(false)
 const error = ref(null)
 const overall = ref({
@@ -242,6 +305,11 @@ const overall = ref({
 })
 const strategies = ref({})
 const history = ref([])
+
+const periodLabel = computed(() => {
+  const hit = periodOptions.find((p) => p.id === period.value)
+  return hit ? hit.label : period.value
+})
 
 const overallPnl = computed(() => Number(overall.value?.total_pnl) || 0)
 
@@ -259,6 +327,28 @@ const strategyList = computed(() => {
     }))
     .sort((a, b) => b.total_trades - a.total_trades)
 })
+
+/** Newest trades first — timestamp → updated_at → created_at → id. */
+const sortedHistory = computed(() => {
+  const list = Array.isArray(history.value) ? [...history.value] : []
+  return list.sort((a, b) => tradeSortMs(b) - tradeSortMs(a))
+})
+
+function setPeriod(id) {
+  if (period.value === id) return
+  period.value = id
+}
+
+function tradeSortMs(trade) {
+  if (!trade) return 0
+  const raw = trade.timestamp || trade.updated_at || trade.created_at || null
+  if (raw) {
+    const ms = Date.parse(raw)
+    if (Number.isFinite(ms)) return ms
+  }
+  const id = Number(trade.id)
+  return Number.isFinite(id) ? id : 0
+}
 
 function safeNum(v, fallback = 0) {
   const n = Number(v)
@@ -288,7 +378,6 @@ function formatPct(v) {
 
 function formatPF(v) {
   const n = safeNum(v)
-  // Backend uses 999.0 as infinity sentinel when gross_loss == 0
   if (n >= 999) return '∞'
   return n.toFixed(2)
 }
@@ -303,20 +392,100 @@ function formatStrategy(name) {
   return String(name).replace(/_/g, ' ').toUpperCase()
 }
 
-function shortId(id) {
-  if (!id) return '—'
-  const s = String(id)
-  return s.length > 8 ? s.slice(-6) : s
+function truncateToken(tokenId) {
+  const tid = String(tokenId || '')
+  if (!tid) return '—'
+  return tid.slice(0, 6) + '...'
 }
 
-function matchLabel(tokenId) {
-  if (!tokenId) return '—'
-  const name = marketStore.getTeamNameFromToken(tokenId)
-  if (!name || name === 'UNKNOWN' || !String(name).trim()) {
-    const tid = String(tokenId)
-    return tid.slice(0, 6) + '...'
+/**
+ * Primary label: team/outcome if known, else match title/question, else truncated token.
+ * Prefer backend enrichment (works for closed historical markets).
+ */
+function matchLabel(trade) {
+  if (!trade) return '—'
+
+  const storeMeta = marketStore.resolveMarketFromToken(trade.token_id)
+  const outcome =
+    (trade.outcome && String(trade.outcome).trim()) ||
+    (storeMeta.teamName && storeMeta.teamName !== 'UNKNOWN' ? storeMeta.teamName : '') ||
+    ''
+  const title =
+    (trade.match_title && String(trade.match_title).trim()) ||
+    (trade.question && String(trade.question).trim()) ||
+    (storeMeta.title && String(storeMeta.title).trim()) ||
+    (storeMeta.question && String(storeMeta.question).trim()) ||
+    ''
+
+  // Prefer "TEAM — Match" when both exist
+  if (outcome && title && outcome.toUpperCase() !== title.toUpperCase()) {
+    return `${outcome} — ${title}`
   }
-  return name
+  if (outcome) return outcome
+  if (title) return title
+  return truncateToken(trade.token_id)
+}
+
+function matchSubtitle(trade) {
+  if (!trade) return ''
+  // When primary already includes full title, no subtitle needed
+  const label = matchLabel(trade)
+  const storeMeta = marketStore.resolveMarketFromToken(trade.token_id)
+  const question =
+    (trade.question && String(trade.question).trim()) ||
+    (storeMeta.question && String(storeMeta.question).trim()) ||
+    ''
+  if (!question) return ''
+  if (label.toUpperCase().includes(question.toUpperCase())) return ''
+  return question
+}
+
+function matchImage(trade) {
+  if (!trade) return null
+  if (trade.image) return trade.image
+  return marketStore.getImageFromToken(trade.token_id)
+}
+
+function onImageError(e) {
+  if (e?.target) {
+    e.target.style.display = 'none'
+  }
+}
+
+function tradeDate(trade) {
+  const raw = trade?.timestamp || trade?.updated_at || trade?.created_at
+  if (!raw) return null
+  const d = new Date(raw)
+  return Number.isNaN(d.getTime()) ? null : d
+}
+
+function formatDate(trade) {
+  const d = tradeDate(trade)
+  if (!d) return trade?.id != null ? `#${trade.id}` : '—'
+  try {
+    return d.toLocaleDateString(undefined, {
+      year: 'numeric',
+      month: 'short',
+      day: '2-digit',
+    })
+  } catch {
+    return d.toISOString().slice(0, 10)
+  }
+}
+
+function formatTime(trade) {
+  const d = tradeDate(trade)
+  if (!d) return ''
+  try {
+    return d.toLocaleTimeString(undefined, {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    })
+  } catch {
+    return d.toISOString().slice(11, 19)
+  }
 }
 
 function statusClass(status) {
@@ -338,9 +507,10 @@ async function refresh() {
   loading.value = true
   error.value = null
   try {
+    const q = new URLSearchParams({ period: period.value })
     const [summary, hist] = await Promise.all([
-      apiFetch('/api/stats/summary'),
-      apiFetch('/api/stats/history'),
+      apiFetch(`/api/stats/summary?${q}`),
+      apiFetch(`/api/stats/history?${q}`),
     ])
     overall.value = summary?.overall || overall.value
     strategies.value = summary?.strategies || {}
@@ -351,6 +521,10 @@ async function refresh() {
     loading.value = false
   }
 }
+
+watch(period, () => {
+  refresh()
+})
 
 onMounted(() => {
   refresh()
