@@ -34,4 +34,13 @@ export const tradeApi = {
       method: 'POST',
     })
   },
+
+  /** Read-only PnL / strategy analytics */
+  getStatsSummary() {
+    return apiFetch('/api/stats/summary')
+  },
+
+  getStatsHistory() {
+    return apiFetch('/api/stats/history')
+  },
 }

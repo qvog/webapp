@@ -6,7 +6,7 @@
     ]"
   >
     <div class="flex flex-col gap-1 py-4">
-      <div class="flex items-center px-4 mb-6 cursor-pointer" @click="$emit('home')">
+      <div class="flex items-center px-4 mb-6 cursor-pointer" @click="goHome">
         <div
           class="w-8 h-8 rounded shrink-0 flex items-center justify-center font-black text-black bg-[#00e5ff] tracking-tighter shadow-[0_0_15px_rgba(0,229,255,0.3)]"
         >
@@ -25,12 +25,12 @@
       <NavItem
         v-for="item in navItems"
         :key="item.id"
-        :active="marketStore.activeCategory === item.id"
+        :active="activeTab === 'terminal' && marketStore.activeCategory === item.id"
         :active-class="item.activeClass || 'text-[#00e5ff]'"
         :bar-class="item.barClass || 'bg-[#00e5ff] shadow-[0_0_10px_rgba(0,229,255,0.5)]'"
         :expanded="marketStore.isSidebarExpanded"
         :label="item.label"
-        @click="marketStore.setCategory(item.id)"
+        @click="selectCategory(item.id)"
       >
         <template #icon>
           <span v-html="item.icon" />
@@ -40,12 +40,12 @@
       <div class="h-px bg-zinc-900 mx-4 my-2 shrink-0" />
 
       <NavItem
-        :active="marketStore.activeCategory === 'live'"
+        :active="activeTab === 'terminal' && marketStore.activeCategory === 'live'"
         active-class="text-red-500"
         bar-class="bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.5)]"
         :expanded="marketStore.isSidebarExpanded"
         label="Live Markets"
-        @click="marketStore.setCategory('live')"
+        @click="selectCategory('live')"
       >
         <template #icon>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="w-6 h-6 shrink-0">
@@ -55,17 +55,33 @@
       </NavItem>
 
       <NavItem
-        :active="marketStore.activeCategory === 'favorites'"
+        :active="activeTab === 'terminal' && marketStore.activeCategory === 'favorites'"
         active-class="text-yellow-500"
         bar-class="bg-yellow-500 shadow-[0_0_10px_rgba(234,179,8,0.5)]"
         :expanded="marketStore.isSidebarExpanded"
         label="Favorites"
-        @click="marketStore.setCategory('favorites')"
+        @click="selectCategory('favorites')"
       >
         <template #icon>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="w-6 h-6 shrink-0">
             <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
           </svg>
+        </template>
+      </NavItem>
+
+      <!-- Statistics / PnL — placed explicitly BELOW Favorites -->
+      <NavItem
+        :active="activeTab === 'stats'"
+        active-class="text-emerald-400"
+        bar-class="bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.5)]"
+        :expanded="marketStore.isSidebarExpanded"
+        label="Statistics / PnL"
+        @click="emit('change-tab', 'stats')"
+      >
+        <template #icon>
+          <span class="w-6 h-6 shrink-0 flex items-center justify-center text-base leading-none" aria-hidden="true">
+            📊
+          </span>
         </template>
       </NavItem>
     </div>
@@ -108,9 +124,23 @@
 import { useMarketStore } from '../../store/marketStore'
 import NavItem from './NavItem.vue'
 
-defineEmits(['home'])
+defineProps({
+  activeTab: { type: String, default: 'terminal' },
+})
+
+const emit = defineEmits(['home', 'change-tab'])
 
 const marketStore = useMarketStore()
+
+function selectCategory(id) {
+  emit('change-tab', 'terminal')
+  marketStore.setCategory(id)
+}
+
+function goHome() {
+  emit('change-tab', 'terminal')
+  emit('home')
+}
 
 const iconClass = 'w-6 h-6 shrink-0'
 const navItems = [

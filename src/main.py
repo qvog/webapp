@@ -11,6 +11,7 @@ from py_clob_client_v2 import PartialCreateOrderOptions
 
 from src.api import markets, trade
 from src.api.client import get_clob_client, run_sync
+from src.api.stats import router as stats_router
 from src.api.trade import active_token_radars
 from src.config import settings
 from src.database.db import SessionLocal, ensure_schema
@@ -104,6 +105,7 @@ app.add_middleware(
 
 app.include_router(trade.router, prefix="/api")
 app.include_router(markets.router, prefix="/api")
+app.include_router(stats_router, prefix="/api")
 
 
 @app.get("/health")

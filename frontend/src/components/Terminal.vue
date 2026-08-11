@@ -1,7 +1,5 @@
 <template>
-  <div class="flex h-screen w-full bg-[#000000] text-gray-200 font-sans overflow-hidden" ref="terminalRoot">
-    <Sidebar @home="closeTerminal" />
-
+  <div class="flex flex-1 min-w-0 h-full overflow-hidden" ref="terminalRoot">
     <SubcategoryNav v-if="!currentEvent" />
 
     <main class="flex-1 flex flex-col min-w-0 bg-gradient-to-br from-[#000000] via-[#030303] to-[#001012]">
@@ -119,7 +117,6 @@ import { ref, onMounted, onUnmounted, nextTick, computed } from 'vue'
 import { useToast } from 'vue-toastification'
 
 import OrderBook from './Terminal/OrderBook.vue'
-import Sidebar from './Terminal/Sidebar.vue'
 import SubcategoryNav from './Terminal/SubcategoryNav.vue'
 import FavoritesBar from './Terminal/FavoritesBar.vue'
 import MarketGrid from './Terminal/MarketGrid.vue'
