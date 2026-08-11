@@ -25,15 +25,25 @@
         :key="pos.order_id"
         class="border border-zinc-800 rounded-xl bg-[#050505] p-3 flex flex-col gap-2 transition-colors hover:border-zinc-600"
       >
-        <div class="flex justify-between items-center">
-          <span
-            class="font-bold text-[11px] truncate max-w-[110px] text-gray-200 uppercase tracking-wide"
-            :title="marketStore.getTeamNameFromToken(pos.token_id)"
-          >
-            {{ marketStore.getTeamNameFromToken(pos.token_id) }}
-          </span>
+        <div class="flex justify-between items-center gap-2">
+          <div class="flex items-center gap-1.5 min-w-0">
+            <!-- Same marker as OrderBook: ● + last 4 of order_id -->
+            <span
+              class="flex items-center gap-0.5 shrink-0 text-yellow-400 font-bold text-[10px] font-mono leading-none tracking-tight"
+              :title="pos.order_id"
+            >
+              <span class="inline-block w-1.5 h-1.5 rounded-full bg-yellow-400 shadow-[0_0_6px_#eab308]" />
+              {{ shortOrderId(pos.order_id) }}
+            </span>
+            <span
+              class="font-bold text-[11px] truncate text-gray-200 uppercase tracking-wide"
+              :title="marketStore.getTeamNameFromToken(pos.token_id)"
+            >
+              {{ marketStore.getTeamNameFromToken(pos.token_id) }}
+            </span>
+          </div>
 
-          <div class="flex items-center">
+          <div class="flex items-center shrink-0">
             <span
               v-if="pos.status === 'PENDING'"
               class="text-[9px] px-1.5 py-0.5 rounded font-bold bg-yellow-500/10 text-yellow-500 border border-yellow-500/30 animate-pulse uppercase tracking-widest"
@@ -88,4 +98,9 @@ defineProps({
 defineEmits(['panic'])
 
 const marketStore = useMarketStore()
+
+/** Last 4 chars of order_id — matches OrderBook yellow marker label */
+function shortOrderId(orderId) {
+  return String(orderId || '').slice(-4)
+}
 </script>
