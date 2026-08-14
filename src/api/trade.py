@@ -40,7 +40,7 @@ MAX_LIMIT_PRICE = 0.99
 # Known strategy identifiers (presets + custom)
 PRESET_STRATEGIES = frozenset(
     {
-        "draft_early",
+        "fix",
         "draft_win",
         "short_range",
         "high_range",
@@ -94,9 +94,10 @@ def resolve_strategy_levels(
     entry = round(float(entry), 2)
     strategy = (strategy or "custom").lower()
 
-    if strategy == "draft_early":
-        # Dual TPs are placed by monitor after fill; only SL is stored on the position
-        return None, round(entry - 0.06, 2)
+    if strategy == "fix":
+        # Manual TP from UI required; SL completely disabled
+        tp = round(float(req_tp), 2) if req_tp is not None else None
+        return tp, None
 
     if strategy == "draft_win":
         return None, None
@@ -151,9 +152,9 @@ async def place_order(
     if req.bankroll < 5.00:
         return {"success": False, "error": f"Банкролл ({req.bankroll}$) меньше $5."}
 
-    # Size: all_in_half overrides to 50% of bankroll; otherwise risk_percent
+    # Size: all_in_half uses Volume / 2 (bankroll = UI Volume field); otherwise risk_percent
     if strategy == "all_in_half":
-        actual_invest = round(float(req.bankroll) * 0.5, 2)
+        actual_invest = round(float(req.bankroll) / 2.0, 2)
     else:
         target_invest = req.bankroll * (req.risk_percent / 100)
         actual_invest = min(req.bankroll, max(5.00, target_invest))
@@ -171,7 +172,14 @@ async def place_order(
         req.stop_loss_price,
     )
     safe_tp = _clamp_price(raw_tp)
+    # fix requires a manual TP from the UI
+    if strategy == "fix" and safe_tp is None:
+        return {
+            "success": False,
+            "error": "Fix strategy requires a Take Profit price.",
+        }
     # SL may be below 0.01 after subtract — clamp to tradable floor when set
+    # fix / draft_win / all_in_half: SL is None → radar ignores
     if raw_sl is not None:
         sl_price = max(0.01, round(float(raw_sl), 2))
     else:
@@ -481,6 +489,84 @@ async def panic_sell_position(order_id: str, db: Session = Depends(get_db)):
 
     except Exception as exc:
         logger.exception("panic_sell failed")
+        return {"success": False, "error": f"Внутренняя ошибка сервера: {exc}"}
+
+
+class ResolveRequest(BaseModel):
+    """Manual resolve for stuck/ended markets — feeds PnL/stats."""
+
+    exit_price: float = Field(..., description="Exit price in [0.0, 1.0]")
+
+    @field_validator("exit_price")
+    @classmethod
+    def exit_in_band(cls, value: float) -> float:
+        v = float(value)
+        if v < 0.0 or v > 1.0:
+            raise ValueError("exit_price must be between 0.0 and 1.0")
+        return round(v, 4)
+
+
+@router.post("/positions/{order_id}/resolve")
+async def resolve_position(
+    order_id: str,
+    req: ResolveRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Manually mark a stuck OPEN/PENDING position as RESOLVED with a given exit_price.
+
+    Used for ended markets where auto-resolve failed (Win 100¢ / Loss 0¢ / Drop @ entry).
+    Cancels any live TP legs so balance is unfrozen, then updates DB for stats/PnL.
+    """
+    try:
+        pos = db.query(Position).filter(Position.order_id == order_id).first()
+        if not pos:
+            return {"success": False, "error": "Позиция не найдена в базе данных"}
+
+        if pos.status not in ("OPEN", "PENDING"):
+            return {
+                "success": False,
+                "error": f"Позиция уже закрыта (status={pos.status})",
+            }
+
+        # Cancel live TP legs if any (best-effort)
+        for tp_id in _split_tp_ids(getattr(pos, "tp_order_id", None)):
+            try:
+                await cancel_order(tp_id)
+            except Exception as exc:
+                logger.warning(
+                    "[Resolve] TP cancel failed %s for %s: %s", tp_id, order_id, exc
+                )
+
+        # Best-effort cancel unfilled entry if still PENDING
+        if pos.status == "PENDING":
+            try:
+                await cancel_order(order_id)
+            except Exception as exc:
+                logger.warning(
+                    "[Resolve] entry cancel failed for %s: %s", order_id, exc
+                )
+
+        pos.status = "RESOLVED"
+        pos.exit_price = float(req.exit_price)
+        db.commit()
+
+        order_audit.info(
+            "MANUAL RESOLVE | order_id=%s exit_price=%s strategy=%s",
+            order_id,
+            req.exit_price,
+            pos.strategy,
+        )
+        return {
+            "success": True,
+            "message": f"Resolved @ {req.exit_price}",
+            "order_id": order_id,
+            "exit_price": req.exit_price,
+            "status": "RESOLVED",
+        }
+    except Exception as exc:
+        logger.exception("resolve_position failed")
+        db.rollback()
         return {"success": False, "error": f"Внутренняя ошибка сервера: {exc}"}
 
 

@@ -30,7 +30,7 @@
           </option>
         </select>
         <p class="mt-1.5 text-[9px] text-zinc-600 font-mono tracking-wide">
-          F1–F4 presets · F5 all-in · F10 flatten
+          F1–F3 presets · F10 flatten
         </p>
       </div>
 
@@ -44,6 +44,7 @@
         />
       </div>
 
+      <!-- Custom: both TP offset + SL offset -->
       <div v-if="marketStore.activeStrategy === 'custom'" class="flex gap-2">
         <div class="flex-1">
           <label class="block text-[10px] text-zinc-500 mb-1.5 uppercase tracking-widest">TP (¢)</label>
@@ -61,6 +62,27 @@
             class="w-full border border-zinc-800 rounded-lg px-2 py-2 text-sm font-bold outline-none focus:border-indigo-400 bg-[#050505] text-indigo-400 transition-all"
           />
         </div>
+      </div>
+
+      <!-- Fix: manual absolute TP only, SL disabled -->
+      <div v-else-if="marketStore.activeStrategy === 'fix'" class="flex flex-col gap-1.5">
+        <div>
+          <label class="block text-[10px] text-zinc-500 mb-1.5 uppercase tracking-widest">
+            TP Price (¢)
+          </label>
+          <input
+            v-model="marketStore.fixTpCents"
+            type="number"
+            min="1"
+            max="99"
+            step="1"
+            placeholder="e.g. 55"
+            class="w-full border border-zinc-800 rounded-lg px-2 py-2 text-sm font-bold outline-none focus:border-[#00e5ff] bg-[#050505] text-[#00e5ff] transition-all"
+          />
+        </div>
+        <p class="text-[9px] text-zinc-600 font-mono tracking-wide">
+          Absolute take-profit · SL disabled
+        </p>
       </div>
 
       <div
@@ -110,19 +132,19 @@ const volumeInput = ref(null)
 
 const strategyOptions = [
   { value: 'custom', label: 'Custom' },
-  { value: 'draft_early', label: 'Draft Early (F1)' },
-  { value: 'draft_win', label: 'Draft Win (F2)' },
-  { value: 'short_range', label: 'Short Range (F3)' },
-  { value: 'high_range', label: 'High Range (F4)' },
-  { value: 'all_in_half', label: 'All In Half (F5)' },
+  { value: 'fix', label: 'Fix' },
+  { value: 'draft_win', label: 'Draft Win (F1)' },
+  { value: 'short_range', label: 'Short Range (F2)' },
+  { value: 'high_range', label: 'High Range (F3)' },
+  { value: 'all_in_half', label: 'All In Half' },
 ]
 
 const PRESET_HINTS = {
-  draft_early: 'TP split +6¢ / +12¢ · SL −6¢ after 16m',
+  fix: 'Manual TP required · No SL',
   draft_win: 'No TP · No SL — hold to resolve',
   short_range: 'TP +4¢ · SL −6¢ · 3-tick SL',
   high_range: 'TP +6¢ · SL −8¢ · 3-tick SL',
-  all_in_half: '50% bankroll · No TP/SL (confirm F5)',
+  all_in_half: 'Volume ÷ 2 · No TP/SL · limit @ clicked price',
 }
 
 const presetHint = computed(

@@ -30,8 +30,6 @@ logger = logging.getLogger(__name__)
 # Avoid routing WS through HTTP proxy
 os.environ.setdefault("no_proxy", "ws-subscriptions-clob.polymarket.com")
 
-# draft_early: SL disabled for this many seconds after first radar sight
-DRAFT_EARLY_SL_DELAY_SEC = 960  # 16 minutes
 # Consecutive ticks with best_bid <= SL before market sell
 SL_TICK_CONFIRMATIONS = 3
 
@@ -78,7 +76,12 @@ def _get_position_entry(order_id: str) -> float | None:
 
 
 def _get_open_sl_positions(token_id: str) -> list[dict[str, Any]]:
-    """Snapshot open SL positions; values are plain Python (session closed after)."""
+    """
+    Snapshot open SL positions; values are plain Python (session closed after).
+
+    strategy="fix" is never returned — Fix has no stop-loss and must be
+    completely ignored by the SL radar.
+    """
     with db_session() as db:
         rows = (
             db.query(Position)
@@ -89,16 +92,22 @@ def _get_open_sl_positions(token_id: str) -> list[dict[str, Any]]:
             )
             .all()
         )
-        return [
-            {
-                "order_id": p.order_id,
-                "sl_trigger_price": float(p.sl_trigger_price),
-                "size": float(p.size),
-                "strategy": p.strategy or "custom",
-                "tp_order_id": p.tp_order_id,
-            }
-            for p in rows
-        ]
+        result = []
+        for p in rows:
+            strategy = (p.strategy or "custom").lower()
+            # Fix strategy: hard-skip even if sl_trigger_price was set by mistake
+            if strategy == "fix":
+                continue
+            result.append(
+                {
+                    "order_id": p.order_id,
+                    "sl_trigger_price": float(p.sl_trigger_price),
+                    "size": float(p.size),
+                    "strategy": strategy,
+                    "tp_order_id": p.tp_order_id,
+                }
+            )
+        return result
 
 
 def _get_open_tp_positions(token_id: str) -> list[dict[str, Any]]:
@@ -281,7 +290,7 @@ async def _check_tp_status(client: Any, order_id: str, tp_order_id: str) -> bool
     """
     Return True if position closed via TP fill or market resolve.
 
-    Supports comma-separated dual TP ids (draft_early): closes only when
+    Supports comma-separated dual TP ids (legacy): closes only when
     every live TP leg is MATCHED/FILLED (or any is CANCELED/EXPIRED → RESOLVED).
     """
     tp_ids = _split_tp_ids(tp_order_id)
@@ -320,65 +329,6 @@ async def _check_tp_status(client: Any, order_id: str, tp_order_id: str) -> bool
     return False
 
 
-async def _place_draft_early_tps(
-    client: Any,
-    order_id: str,
-    token_id: str,
-    actual_size: float,
-    entry_price: float,
-    options: PartialCreateOrderOptions,
-    strategy: str,
-) -> None:
-    """
-    draft_early: two sequential REST take-profits.
-    """
-    entry = round(float(entry_price), 2)
-    size = round(float(actual_size), 2)
-    
-    if size < 10.0:
-        logger.warning(f"[Lifecycle] Size {size} is too small to split. Placing single TP.")
-        tp1_size = size
-        tp2_size = 0.0
-    else:
-        tp1_size = round(size * 0.5, 2)
-        tp2_size = round(size - tp1_size, 2)
-    
-    tp1_price = round(entry + 0.06, 2)
-    tp2_price = round(entry + 0.12, 2)
-    
-    tp1_price = max(0.01, min(0.99, tp1_price))
-    tp2_price = max(0.01, min(0.99, tp2_price))
-
-    tp_ids: list[str] = []
-
-    if tp1_size > 0:
-        tp1_id = await _place_take_profit(client, token_id, tp1_size, tp1_price, options)
-        if tp1_id:
-            tp_ids.append(tp1_id)
-            order_audit.info(
-                "TP PLACED | order_id=%s token_id=%s tp_order_id=%s size=%s price=%s strategy=%s leg=1",
-                order_id, token_id, tp1_id, tp1_size, tp1_price, strategy,
-            )
-        else:
-            order_audit.error("TP1 FAILED | order_id=%s strategy=%s size=%s price=%s", order_id, strategy, tp1_size, tp1_price)
-
-    if tp2_size > 0:
-        tp2_id = await _place_take_profit(client, token_id, tp2_size, tp2_price, options)
-        if tp2_id:
-            tp_ids.append(tp2_id)
-            order_audit.info(
-                "TP PLACED | order_id=%s token_id=%s tp_order_id=%s size=%s price=%s strategy=%s leg=2",
-                order_id, token_id, tp2_id, tp2_size, tp2_price, strategy,
-            )
-        else:
-            order_audit.error("TP2 FAILED | order_id=%s strategy=%s size=%s price=%s", order_id, strategy, tp2_size, tp2_price)
-
-    if tp_ids:
-        _update_position(order_id, tp_order_id=",".join(tp_ids))
-    else:
-        order_audit.error("DRAFT_EARLY FATAL | No TP legs placed for %s", order_id)
-
-
 async def setup_order_lifecycle(
     order_id: str,
     original_size: float,
@@ -392,10 +342,18 @@ async def setup_order_lifecycle(
     """
     REST-only lifecycle for a single order (Phase 1–2).
 
-    Waits for fill, marks OPEN, places TP limit(s), stores tp_order_id, then exits.
-    SL monitoring is owned by the singleton token_sl_radar for this token.
+    Waits for fill, marks OPEN, places a single TP limit (when set), stores
+    tp_order_id, then exits. SL monitoring is owned by the singleton
+    token_sl_radar for this token.
+
+    strategy="fix": places the manual TP only; SL is never set and radar
+    will ignore the position entirely.
     """
     strategy = (strategy or "custom").lower()
+    # fix: force-disable SL regardless of what was passed in
+    if strategy == "fix":
+        sl_price = None
+
     logger.info(
         "[Lifecycle] start %s strategy=%s sl=%s",
         order_id,
@@ -416,37 +374,26 @@ async def setup_order_lifecycle(
         _update_position(order_id, status="EXPIRED")
         return
 
-    # Ensure SL trigger is persisted (radar reads it from DB)
-    if sl_price is not None:
+    # Ensure SL trigger is persisted (radar reads it from DB).
+    # fix: clear any accidental SL so radar never evaluates this position.
+    if strategy == "fix":
+        _update_position(order_id, sl_trigger_price=None)
+    elif sl_price is not None:
         _update_position(
             order_id,
             sl_trigger_price=max(0.01, round(float(sl_price), 2)),
         )
 
-    # Resolve entry / existing TP for dual-TP math and restore safety
+    # Resolve existing TP for restore safety
     pos_fields = _get_position_fields(order_id)
-    entry = entry_price if entry_price is not None else pos_fields.get("entry_price")
-    if entry is None:
-        entry = 0.0
-    entry = round(float(entry), 2)
     existing_tp = pos_fields.get("tp_order_id")
 
-    # Phase 2: place Take Profit limit(s) — skip if restore already has TP ids
+    # Phase 2: place single Take Profit limit — skip if restore already has TP ids
     if existing_tp:
         logger.info(
             "[Lifecycle] TP already set for %s (%s) — skip place",
             order_id,
             existing_tp,
-        )
-    elif strategy == "draft_early":
-        await _place_draft_early_tps(
-            client,
-            order_id,
-            token_id,
-            actual_size,
-            entry,
-            options,
-            strategy,
         )
     elif tp_price:
         tp_order_id = await _place_take_profit(
@@ -466,6 +413,11 @@ async def setup_order_lifecycle(
             )
         else:
             logger.error("[Lifecycle] failed to place TP for %s", order_id)
+    elif strategy == "fix":
+        order_audit.error(
+            "FIX FATAL | No TP price for %s — position left OPEN without exit",
+            order_id,
+        )
 
     logger.info(
         "[Lifecycle] done %s size=%s (SL radar owns Phase 3)",
@@ -490,8 +442,6 @@ async def token_sl_radar(token_id: str) -> None:
     asks_book: dict[float, float] = {}
     # Key: order_id → consecutive ticks where best_bid is at/below SL
     sl_confirmations: dict[str, int] = {}
-    # Key: order_id → monotonic timestamp of first radar sight (draft_early SL delay)
-    pos_start_times: dict[str, float] = {}
     empty_book_count = 0
     last_tp_check = time.time()
 
@@ -522,7 +472,6 @@ async def token_sl_radar(token_id: str) -> None:
                                 )
                                 if closed:
                                     sl_confirmations.pop(tp_pos["order_id"], None)
-                                    pos_start_times.pop(tp_pos["order_id"], None)
                             await _seed_order_book(client, token_id, bids_book, asks_book)
 
                         try:
@@ -559,7 +508,6 @@ async def token_sl_radar(token_id: str) -> None:
                                         exit_price=1.0,
                                     )
                                 sl_confirmations.clear()
-                                pos_start_times.clear()
                                 empty_book_count = 0
                             continue
                         empty_book_count = 0
@@ -574,15 +522,13 @@ async def token_sl_radar(token_id: str) -> None:
                             continue
 
                         # --- c. Active OPEN positions with SL for this token ---
+                        # (fix strategy is excluded inside _get_open_sl_positions)
                         positions = _get_open_sl_positions(token_id)
                         active_ids = {p["order_id"] for p in positions}
-                        # Drop confirmations / start times for positions no longer OPEN
+                        # Drop confirmations for positions no longer OPEN
                         for oid in list(sl_confirmations.keys()):
                             if oid not in active_ids:
                                 sl_confirmations.pop(oid, None)
-                        for oid in list(pos_start_times.keys()):
-                            if oid not in active_ids:
-                                pos_start_times.pop(oid, None)
 
                         # --- d. Per-order SL evaluation (independent counters) ---
                         for pos in positions:
@@ -590,15 +536,10 @@ async def token_sl_radar(token_id: str) -> None:
                             sl_trigger = pos["sl_trigger_price"]
                             strategy = (pos.get("strategy") or "custom").lower()
 
-                            # draft_early: record first sight; block SL for 16 minutes
-                            if strategy == "draft_early":
-                                if order_id not in pos_start_times:
-                                    pos_start_times[order_id] = time.monotonic()
-                                age = time.monotonic() - pos_start_times[order_id]
-                                if age <= DRAFT_EARLY_SL_DELAY_SEC:
-                                    # SL disabled until 16m elapsed
-                                    sl_confirmations.pop(order_id, None)
-                                    continue
+                            # Defense in depth: never SL-evaluate fix positions
+                            if strategy == "fix":
+                                sl_confirmations.pop(order_id, None)
+                                continue
 
                             if 0 < best_bid <= sl_trigger:
                                 sl_confirmations[order_id] = (
@@ -650,7 +591,6 @@ async def token_sl_radar(token_id: str) -> None:
                                         exit_price=best_bid,
                                     )
                                     sl_confirmations.pop(order_id, None)
-                                    pos_start_times.pop(order_id, None)
                                 else:
                                     logger.error(
                                         "[Radar] SL order failed for %s", order_id

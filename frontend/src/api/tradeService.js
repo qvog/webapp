@@ -28,6 +28,18 @@ export const tradeApi = {
     })
   },
 
+  /**
+   * Manual resolve for stuck/ended positions.
+   * @param {string} orderId
+   * @param {number} exitPrice 0.0–1.0 (1.0 = win, 0.0 = loss, entry = drop/0 PnL)
+   */
+  resolvePosition(orderId, exitPrice) {
+    return apiFetch(`/api/positions/${encodeURIComponent(orderId)}/resolve`, {
+      method: 'POST',
+      body: JSON.stringify({ exit_price: Number(exitPrice) }),
+    })
+  },
+
   /** F10 flatten: market-sell all OPEN positions for a token */
   flatten(tokenId) {
     return apiFetch(`/api/flatten/${encodeURIComponent(tokenId)}`, {

@@ -174,8 +174,18 @@
         </div>
       </div>
 
-      <!-- Right: sort -->
+      <!-- Right: refresh + sort -->
       <div class="flex items-center gap-2 border-zinc-800/60 shrink-0">
+        <button
+          type="button"
+          @click="refreshMarkets"
+          :disabled="marketStore.isLoadingMarkets"
+          class="text-[10px] font-mono font-bold uppercase tracking-widest px-2.5 py-1 rounded-md border transition-colors disabled:opacity-40
+            border-zinc-800 text-zinc-400 hover:text-[#00e5ff] hover:border-[#00e5ff]/40 bg-zinc-900/40"
+          title="Refresh markets for current category"
+        >
+          ↻ Refresh
+        </button>
         <span class="text-[9px] font-mono text-zinc-600 uppercase tracking-widest mr-1">Sort by:</span>
         <button @click="marketStore.sortBy = 'volume'" :class="sortBtnClass('volume')">VOL</button>
         <button @click="marketStore.sortBy = 'date'" :class="sortBtnClass('date')">DATE</button>
@@ -354,6 +364,11 @@ function sortBtnClass(key) {
       ? 'text-[#00e5ff] bg-[#00e5ff]/10 border border-[#00e5ff]/30 shadow-[0_0_10px_rgba(0,229,255,0.2)]'
       : 'text-zinc-500 border border-transparent hover:text-zinc-300',
   ]
+}
+
+/** Pull latest active markets for the selected category/subcategory */
+function refreshMarkets() {
+  marketStore.loadMatches()
 }
 
 function closeSearch() {
