@@ -91,9 +91,22 @@
                   @click="onSelectCategory(cat)"
                 >
                   <span
-                    class="w-7 h-7 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center shrink-0 group-hover:border-[#00e5ff]/30"
-                    v-html="getSubcategoryIcon(cat.subcategory === 'all' ? cat.category : cat.subcategory)"
-                  />
+                    class="w-7 h-7 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center shrink-0 overflow-hidden group-hover:border-[#00e5ff]/30"
+                  >
+                    <img
+                      v-if="categoryIcon(cat).type === 'image'"
+                      :src="categoryIcon(cat).url"
+                      :alt="cat.label"
+                      class="w-full h-full object-cover"
+                      loading="lazy"
+                      decoding="async"
+                    />
+                    <span
+                      v-else
+                      v-html="categoryIcon(cat).html"
+                      class="flex items-center justify-center"
+                    />
+                  </span>
                   <div class="min-w-0 flex-1">
                     <div class="text-xs font-bold text-gray-200 truncate group-hover:text-[#00e5ff]">
                       {{ cat.label }}
@@ -308,8 +321,13 @@ import {
   formatMarketDate,
   formatVolume,
   searchCategories,
-  getSubcategoryIcon,
+  getSubcategoryIconInfo,
 } from '../../constants/categories'
+
+function categoryIcon(cat) {
+  const id = cat?.subcategory === 'all' ? cat.category : cat?.subcategory
+  return getSubcategoryIconInfo(id)
+}
 
 const emit = defineEmits(['open'])
 const marketStore = useMarketStore()

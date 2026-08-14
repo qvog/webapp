@@ -79,9 +79,12 @@
         @click="emit('change-tab', 'stats')"
       >
         <template #icon>
-          <span class="w-6 h-6 shrink-0 flex items-center justify-center text-base leading-none" aria-hidden="true">
-            📊
-          </span>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="w-6 h-6 shrink-0">
+            <path d="M3 3v18h18" />
+            <path d="M18 17V9" />
+            <path d="M13 17V5" />
+            <path d="M8 17v-3" />
+          </svg>
         </template>
       </NavItem>
     </div>

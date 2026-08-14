@@ -200,13 +200,62 @@ export function searchCategories(query, limit = 8) {
   return out
 }
 
+/**
+ * Polymarket-style category icons.
+ * Prefer official Polymarket S3 league icons (same assets as polymarket.com),
+ * then crypto brand PNGs, then minimal SVG fallbacks for generic tabs.
+ */
+const PM_ICONS = 'https://polymarket-upload.s3.us-east-2.amazonaws.com/league-icons'
+const PM_ROOT = 'https://polymarket-upload.s3.us-east-2.amazonaws.com'
+/** Public crypto brand icons (color, 32–128px friendly). */
+const CRYPTO_ICONS = 'https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@master/128/color'
+
+/** subcategory id → Polymarket / brand image URL */
+const IMAGE_ICONS = {
+  // ── Esports (Polymarket league-icons) ──────────────────────────
+  'dota 2': `${PM_ICONS}/dota2.png`,
+  'league of legend': `${PM_ICONS}/lol.png`,
+  cs2: `${PM_ICONS}/cs2.png`,
+  valorant: `${PM_ICONS}/val.png`,
+  'rainbow six siege': `${PM_ICONS}/r6siege.png`,
+  'starcraft ii': `${PM_ICONS}/sc2.png`,
+  overwatch: `${PM_ICONS}/ow.png`,
+  'rocket league': `${PM_ICONS}/rl.png`,
+  'mobile legends: bang bang': `${PM_ICONS}/mlbb.png`,
+  'honor of kings': `${PM_ICONS}/hok.png`,
+  'call of duty': `${PM_ICONS}/codmw.png`,
+
+  // ── Sports (Polymarket league-icons) ───────────────────────────
+  ucl: `${PM_ICONS}/ucl.png`,
+  nba: `${PM_ICONS}/nba.png`,
+  mlb: `${PM_ICONS}/mlb.png`,
+  footbal: `${PM_ICONS}/epl.png`, // soccer / football
+  football: `${PM_ICONS}/nfl.png`, // American football
+  tennis: `${PM_ICONS}/atp.png`,
+  cricket: `${PM_ROOT}/cricket-ball-a0b0bf2dc9.png`,
+  basketbal: `${PM_ICONS}/nba.png`,
+  hockey: `${PM_ICONS}/nhl.png`,
+  baseball: `${PM_ICONS}/mlb.png`,
+  golf: `${PM_ICONS}/pga.png`,
+  ufc: `${PM_ICONS}/ufc.png`,
+  'formula 1': `${PM_ICONS}/f1.png`,
+  chess: `${PM_ICONS}/chess.png`,
+  boxing: `${PM_ICONS}/boxing-cba26879.png`,
+  // rugby / pickleball: no dedicated PM icon → SVG fallback
+
+  // ── Crypto brands ──────────────────────────────────────────────
+  bitcoin: `${CRYPTO_ICONS}/btc.png`,
+  ethereum: `${CRYPTO_ICONS}/eth.png`,
+  solana: `${CRYPTO_ICONS}/sol.png`,
+  xrp: `${CRYPTO_ICONS}/xrp.png`,
+  dogecoin: `${CRYPTO_ICONS}/doge.png`,
+}
+
 const S = 'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"'
 
-const ICONS = {
+const SVG_PATHS = {
   live: `<circle cx="12" cy="12" r="5" fill="currentColor"/><path d="M22 12A10 10 0 0 0 12 2a10 10 0 0 0-10 10" stroke-dasharray="4 4" stroke-width="2"/>`,
   clock: `<circle cx="12" cy="12" r="10" ${S}/><path d="M12 6v6l4 2" ${S}/>`,
-  btc: `<path d="M9 8h4a3 3 0 0 1 0 6H9V8zM9 14h4.5a3.5 3.5 0 0 1 0 7H9v-7zM11 5v3M14 5v3M11 21v-3M14 21v-3" ${S}/>`,
-  eth: `<path d="M12 2L3 14l9 8 9-8L12 2zM12 2v20M3 14l9-4 9 4" ${S}/>`,
   coin: `<circle cx="12" cy="12" r="10" ${S}/><path d="M8 12h8M12 8v8" ${S}/>`,
   build: `<rect x="4" y="4" width="16" height="16" rx="2" ${S}/><path d="M12 8v8M8 12h8" ${S}/>`,
   graph: `<polyline points="22 12 18 12 15 21 9 3 6 12 2 12" ${S}/>`,
@@ -219,40 +268,72 @@ const ICONS = {
   mma: `<rect x="4" y="8" width="16" height="12" rx="2" ${S}/><path d="M8 8V6a4 4 0 0 1 8 0v2M10 14h4" ${S}/>`,
   chess: `<path d="M8 20h8M10 20v-4h4v4M12 16v-8M10 8l2-4 2 4z" ${S}/>`,
   all: `<rect x="3" y="3" width="7" height="7" rx="1" ${S}/><rect x="14" y="3" width="7" height="7" rx="1" ${S}/><rect x="14" y="14" width="7" height="7" rx="1" ${S}/><rect x="3" y="14" width="7" height="7" rx="1" ${S}/>`,
-  dota: `<path fill="currentColor" d="M2.93 9.48c.024 4.12 2.363 7.98 5.313 10.3l1.89-3.39-4.1-4.47 1.38-2.82-3.35-3.65c-.96 1.43-1.49 3.13-1.13 4.03zm15.42 1.63l-2.45-1.88-.71-4.47-5.88 1.43 1.28 2.3 4.22-1.33 1.13 1.23-5.26 1.65 1.5 2.7 4.57-1.44 1.91 2.08-5.56 1.75 1.92 3.44 2.53-2.75 1.64.52-2.5 2.73 1-1.83c2.2-1.74 3.66-4.3 4.05-7.15zm-9.78 3.3l-1.23-2.5-3.52 3.84c1.67-.2 3.36-.28 4.75 1.34z"/>`,
-  cs2: `<path d="M12 2A10 10 0 1 0 22 12 10 10 0 0 0 12 2Zm-1.5 14.5v-9L16 12Z" fill="currentColor"/>`,
+  sports: `<path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6" ${S}/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18" ${S}/><path d="M4 22h16" ${S}/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22" ${S}/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22" ${S}/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z" ${S}/>`,
+  esports: `<rect x="2" y="6" width="20" height="12" rx="2" ${S}/><path d="M6 12h4M8 10v4M15 13h.01M18 11h.01" ${S}/>`,
+  crypto: `<path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" ${S}/>`,
+  chart: `<polyline points="23 6 13.5 15.5 8.5 10.5 1 18" ${S}/><polyline points="17 6 23 6 23 12" ${S}/>`,
+  star: `<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" ${S}/>`,
+  science: `<circle cx="12" cy="12" r="3" ${S}/><path d="M12 2v3M12 19v3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M2 12h3M19 12h3M4.9 19.1L7 17M17 7l2.1-2.1" ${S}/>`,
+  culture: `<path d="M4 19V5a2 2 0 0 1 2-2h9l5 5v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z" ${S}/><path d="M14 3v5h5" ${S}/>`,
+  rugby: `<ellipse cx="12" cy="12" rx="9" ry="6" transform="rotate(-35 12 12)" ${S}/><path d="M7 9l10 6M7 15l10-6" ${S}/>`,
+  pickle: `<circle cx="12" cy="12" r="9" ${S}/><path d="M8 10h.01M12 8h.01M16 10h.01M9 14h.01M14 15h.01" ${S}/>`,
 }
 
+function _svgHtml(path, color = 'text-[#00e5ff]', sizeClass = 'w-[18px] h-[18px]') {
+  return `<svg viewBox="0 0 24 24" fill="none" class="${sizeClass} ${color} shrink-0">${path}</svg>`
+}
+
+function _imgHtml(url, sizeClass = 'w-[18px] h-[18px]') {
+  // object-cover + rounded matches Polymarket chip style
+  return `<img src="${url}" alt="" class="${sizeClass} rounded object-cover shrink-0 bg-zinc-900" loading="lazy" decoding="async" />`
+}
+
+function _svgFallback(id) {
+  if (id === 'live') return _svgHtml(SVG_PATHS.live, 'text-red-500')
+  if (
+    id === 'starting soon' ||
+    id.includes('min') ||
+    id.includes('hour') ||
+    id === 'daily' ||
+    id === 'weekly' ||
+    id === 'monthly'
+  ) {
+    return _svgHtml(SVG_PATHS.clock, 'text-yellow-500')
+  }
+  if (id === 'pre-market') return _svgHtml(SVG_PATHS.graph, 'text-green-400')
+  if (['etf', 'microstrategy', 'business', 'politics'].includes(id)) {
+    return _svgHtml(SVG_PATHS.build, 'text-gray-400')
+  }
+  if (id === 'pop-culture') return _svgHtml(SVG_PATHS.culture, 'text-pink-400')
+  if (id === 'science') return _svgHtml(SVG_PATHS.science, 'text-sky-400')
+  if (id === 'rugby') return _svgHtml(SVG_PATHS.rugby, 'text-green-500')
+  if (id === 'pickleball') return _svgHtml(SVG_PATHS.pickle, 'text-lime-400')
+  if (id === 'sports') return _svgHtml(SVG_PATHS.sports, 'text-[#00e5ff]')
+  if (id === 'esports') return _svgHtml(SVG_PATHS.esports, 'text-[#00e5ff]')
+  if (id === 'crypto') return _svgHtml(SVG_PATHS.crypto, 'text-[#00e5ff]')
+  if (id === 'most_traded') return _svgHtml(SVG_PATHS.chart, 'text-[#00e5ff]')
+  if (id === 'favorites') return _svgHtml(SVG_PATHS.star, 'text-yellow-500')
+  if (id === 'others') return _svgHtml(SVG_PATHS.all, 'text-zinc-400')
+  if (id === 'all') return _svgHtml(SVG_PATHS.all, 'text-[#00e5ff]')
+  return _svgHtml(SVG_PATHS.all, 'text-[#00e5ff]')
+}
+
+/**
+ * Structured icon descriptor for a subcategory (or top-level category) id.
+ * @returns {{ type: 'image'|'svg', url?: string, html: string }}
+ */
+export function getSubcategoryIconInfo(id) {
+  const key = (id || '').toLowerCase().trim()
+  const url = IMAGE_ICONS[key]
+  if (url) {
+    return { type: 'image', url, html: _imgHtml(url) }
+  }
+  return { type: 'svg', html: _svgFallback(key) }
+}
+
+/** HTML snippet (img or svg) — used by v-html consumers. */
 export function getSubcategoryIcon(id) {
-  id = (id || '').toLowerCase()
-  let svg = ICONS.all
-  let color = 'text-[#00e5ff]'
-
-  if (id === 'live') { svg = ICONS.live; color = 'text-red-500' }
-  else if (id === 'starting soon' || id.includes('min') || id.includes('hour') || id === 'daily' || id === 'weekly' || id === 'monthly') {
-    svg = ICONS.clock; color = 'text-yellow-500'
-  }
-  else if (id === 'bitcoin') { svg = ICONS.btc; color = 'text-[#F7931A]' }
-  else if (id === 'ethereum') { svg = ICONS.eth; color = 'text-[#627EEA]' }
-  else if (['solana', 'xrp', 'dogecoin'].includes(id)) { svg = ICONS.coin; color = 'text-indigo-400' }
-  else if (['etf', 'microstrategy', 'business', 'politics'].includes(id)) { svg = ICONS.build; color = 'text-gray-400' }
-  else if (id === 'pre-market') { svg = ICONS.graph; color = 'text-green-400' }
-  else if (id === 'dota 2') { svg = ICONS.dota; color = 'text-[#ef4444]' }
-  else if (id === 'cs2') { svg = ICONS.cs2; color = 'text-yellow-400' }
-  else if (['valorant', 'rainbow six siege', 'overwatch', 'call of duty'].includes(id)) {
-    svg = ICONS.target; color = 'text-rose-500'
-  }
-  else if (['league of legend', 'starcraft ii', 'mobile legends: bang bang', 'honor of kings'].includes(id)) {
-    svg = ICONS.sword; color = 'text-purple-400'
-  }
-  else if (id === 'rocket league' || id === 'formula 1') { svg = ICONS.car; color = 'text-blue-400' }
-  else if (id === 'ucl' || id === 'footbal' || id === 'football') { svg = ICONS.soccer; color = 'text-green-400' }
-  else if (id === 'nba' || id === 'basketbal') { svg = ICONS.basket; color = 'text-orange-500' }
-  else if (id === 'tennis' || id === 'pickleball' || id === 'baseball') { svg = ICONS.tennis; color = 'text-lime-400' }
-  else if (id === 'ufc' || id === 'boxing' || id === 'mma' || id === 'rugby') { svg = ICONS.mma; color = 'text-red-500' }
-  else if (id === 'chess' || id === 'science') { svg = ICONS.chess; color = 'text-gray-300' }
-
-  return `<svg viewBox="0 0 24 24" fill="none" class="w-[18px] h-[18px] ${color}">${svg}</svg>`
+  return getSubcategoryIconInfo(id).html
 }
 
 /** Display market times in Moscow (UTC+3), 24h — Polymarket timestamps are UTC. */

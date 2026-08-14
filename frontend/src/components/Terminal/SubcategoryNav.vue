@@ -20,7 +20,21 @@
             : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900/50',
         ]"
       >
-        <span v-html="getSubcategoryIcon(sub.id)" class="shrink-0 flex items-center justify-center" />
+        <!-- Polymarket-style brand / league icon -->
+        <img
+          v-if="iconInfo(sub.id).type === 'image'"
+          :src="iconInfo(sub.id).url"
+          :alt="sub.label"
+          class="w-5 h-5 rounded object-cover shrink-0 bg-zinc-900 border border-zinc-800/80"
+          loading="lazy"
+          decoding="async"
+          @error="onIconError($event)"
+        />
+        <span
+          v-else
+          v-html="iconInfo(sub.id).html"
+          class="shrink-0 flex items-center justify-center w-5 h-5"
+        />
         <span class="truncate">{{ sub.label }}</span>
       </button>
     </div>
@@ -30,10 +44,19 @@
 <script setup>
 import { computed } from 'vue'
 import { useMarketStore } from '../../store/marketStore'
-import { SUBCATEGORIES, getSubcategoryIcon } from '../../constants/categories'
+import { SUBCATEGORIES, getSubcategoryIconInfo } from '../../constants/categories'
 
 const marketStore = useMarketStore()
 
 const category = computed(() => marketStore.activeCategory)
 const items = computed(() => SUBCATEGORIES[marketStore.activeCategory] || [])
+
+function iconInfo(id) {
+  return getSubcategoryIconInfo(id)
+}
+
+function onIconError(e) {
+  // Hide broken remote icons cleanly
+  if (e?.target) e.target.style.visibility = 'hidden'
+}
 </script>
