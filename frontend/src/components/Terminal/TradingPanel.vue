@@ -64,24 +64,29 @@
         </div>
       </div>
 
-      <!-- Fix: manual absolute TP only, SL disabled -->
+      <!-- Fix: relative TP offset only, SL disabled -->
       <div v-else-if="marketStore.activeStrategy === 'fix'" class="flex flex-col gap-1.5">
         <div>
           <label class="block text-[10px] text-zinc-500 mb-1.5 uppercase tracking-widest">
-            TP Price (¢)
+            TP Offset (+¢)
           </label>
-          <input
-            v-model="marketStore.fixTpCents"
-            type="number"
-            min="1"
-            max="99"
-            step="1"
-            placeholder="e.g. 55"
-            class="w-full border border-zinc-800 rounded-lg px-2 py-2 text-sm font-bold outline-none focus:border-[#00e5ff] bg-[#050505] text-[#00e5ff] transition-all"
-          />
+          <div class="relative">
+            <span
+              class="absolute left-2.5 top-1/2 -translate-y-1/2 text-sm font-bold text-[#00e5ff] pointer-events-none"
+            >+</span>
+            <input
+              v-model="marketStore.fixTpCents"
+              type="number"
+              min="1"
+              max="98"
+              step="1"
+              placeholder="+¢ offset"
+              class="w-full border border-zinc-800 rounded-lg pl-6 pr-2 py-2 text-sm font-bold outline-none focus:border-[#00e5ff] bg-[#050505] text-[#00e5ff] transition-all"
+            />
+          </div>
         </div>
         <p class="text-[9px] text-zinc-600 font-mono tracking-wide">
-          Absolute take-profit · SL disabled
+          Relative take-profit · capped @ 99¢ · SL disabled
         </p>
       </div>
 
@@ -136,15 +141,13 @@ const strategyOptions = [
   { value: 'draft_win', label: 'Draft Win (F1)' },
   { value: 'short_range', label: 'Short Range (F2)' },
   { value: 'high_range', label: 'High Range (F3)' },
-  { value: 'all_in_half', label: 'All In Half' },
 ]
 
 const PRESET_HINTS = {
-  fix: 'Manual TP required · No SL',
+  fix: 'Manual +¢ TP offset · No SL · cap 99¢',
   draft_win: 'No TP · No SL — hold to resolve',
   short_range: 'TP +4¢ · SL −6¢ · 3-tick SL',
   high_range: 'TP +6¢ · SL −8¢ · 3-tick SL',
-  all_in_half: 'Volume ÷ 2 · No TP/SL · limit @ clicked price',
 }
 
 const presetHint = computed(

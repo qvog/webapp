@@ -76,46 +76,6 @@
 
       <MarketGrid v-else @open="openEvent" />
     </main>
-
-    <!-- All-In Half confirmation modal (opened only via order-book click) -->
-    <div
-      v-if="showAllInModal"
-      class="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm"
-      @keydown.esc="cancelAllIn"
-    >
-      <div
-        class="max-w-md w-full mx-4 border border-indigo-500/40 rounded-2xl bg-[#0a0a0a] p-6 shadow-[0_0_40px_rgba(99,102,241,0.25)]"
-        role="dialog"
-        aria-modal="true"
-      >
-        <p class="text-sm text-gray-200 leading-relaxed font-medium mb-2">
-          ALL IN HALF — limit @
-          <span class="text-indigo-300 font-mono font-bold">
-            {{ pendingAllInPriceCents != null ? pendingAllInPriceCents + '¢' : '—¢' }}
-          </span>
-          · size Volume/2
-        </p>
-        <p class="text-sm text-zinc-400 leading-relaxed font-medium mb-6">
-          Ты уверен что это не эмоция и это тот самый момент и выбор да или нет?
-        </p>
-        <div class="flex gap-3">
-          <button
-            @click="confirmAllIn"
-            :disabled="allInBusy"
-            class="flex-1 py-2.5 rounded-xl bg-indigo-500 hover:bg-indigo-400 text-black font-bold text-sm uppercase tracking-wider transition-colors disabled:opacity-50"
-          >
-            Да
-          </button>
-          <button
-            @click="cancelAllIn"
-            :disabled="allInBusy"
-            class="flex-1 py-2.5 rounded-xl border border-zinc-700 text-zinc-300 hover:bg-zinc-900 font-bold text-sm uppercase tracking-wider transition-colors disabled:opacity-50"
-          >
-            Нет
-          </button>
-        </div>
-      </div>
-    </div>
   </div>
 </template>
 
@@ -163,10 +123,6 @@ const activeTeam = ref(1)
 const orderBookRef = ref(null)
 const tradingPanelRef = ref(null)
 const terminalRoot = ref(null)
-const showAllInModal = ref(false)
-const allInBusy = ref(false)
-/** Clicked order-book price (dollars) for ALL IN HALF limit order */
-const pendingAllInPrice = ref(null)
 let positionsTimer = null
 
 const STRATEGY_LABELS = {
@@ -175,22 +131,13 @@ const STRATEGY_LABELS = {
   draft_win: 'DRAFT WIN',
   short_range: 'SHORT RANGE',
   high_range: 'HIGH RANGE',
-  all_in_half: 'ALL IN HALF',
 }
-
-const pendingAllInPriceCents = computed(() => {
-  if (pendingAllInPrice.value == null) return null
-  return Math.round(Number(pendingAllInPrice.value) * 100)
-})
 
 const strategyLabel = computed(
   () => STRATEGY_LABELS[marketStore.activeStrategy] || marketStore.activeStrategy?.toUpperCase()
 )
 
 const strategyBadgeClass = computed(() => {
-  if (marketStore.activeStrategy === 'all_in_half') {
-    return 'bg-indigo-500/15 text-indigo-300 border-indigo-500/40'
-  }
   if (marketStore.activeStrategy === 'custom') {
     return 'bg-zinc-800/60 text-zinc-400 border-zinc-700'
   }
@@ -274,7 +221,7 @@ function applyHotkeyPreset(strategy, volume) {
 /**
  * Build POST /api/order payload.
  * For presets, TP/SL are left null — backend resolves levels.
- * Fix: sends absolute manual TP; SL always null.
+ * Fix: sends relative +¢ offset in dollars (e.g. 0.12); backend does entry + offset, cap 0.99.
  * All orders are strict limit at the provided price.
  */
 function buildOrderPayload(priceDollars, strategyOverride = null) {
@@ -292,9 +239,10 @@ function buildOrderPayload(priceDollars, strategyOverride = null) {
     if (tpOff > 0) takeProfit = Math.min(0.99, Math.round((priceCents + tpOff)) / 100)
     if (slOff > 0) stopLoss = Math.max(0.01, Math.round((priceCents - slOff)) / 100)
   } else if (strategy === 'fix') {
-    const tpCents = Number(marketStore.fixTpCents)
-    if (tpCents > 0 && tpCents < 100) {
-      takeProfit = Math.min(0.99, Math.max(0.01, Math.round(tpCents) / 100))
+    // Relative offset in dollars for backend: input 12 → 0.12 (+12¢)
+    const tpOffCents = Number(marketStore.fixTpCents)
+    if (tpOffCents > 0 && tpOffCents < 100) {
+      takeProfit = Math.round(tpOffCents) / 100
     }
     stopLoss = null
   }
@@ -334,16 +282,13 @@ const handleKeydown = (e) => {
     return
   }
 
-  // Global trading hotkeys — F1–F3 presets, F10 flatten (no F5: All In Half is mouse-only)
+  // Global trading hotkeys — F1–F3 presets, F10 flatten
   const key = e.key
   const isTradeHotkey = ['F1', 'F2', 'F3', 'F10'].includes(key)
   if (!isTradeHotkey) return
 
   e.preventDefault()
   e.stopPropagation()
-
-  // Modal open: only Esc / buttons (handled elsewhere)
-  if (showAllInModal.value) return
 
   if (key === 'F1') {
     applyHotkeyPreset('draft_win', 10)
@@ -366,8 +311,6 @@ const closeTerminal = () => {
   disconnect()
   currentEvent.value = null
   activeSubMarket.value = null
-  showAllInModal.value = false
-  pendingAllInPrice.value = null
 }
 
 const openEvent = (match) => {
@@ -392,20 +335,13 @@ const handlePlaceOrder = async (side, priceCents) => {
     return
   }
 
-  // Fix strategy requires a manual TP before placing
+  // Fix strategy requires a relative +¢ TP offset before placing
   if (marketStore.activeStrategy === 'fix') {
     const tpCents = Number(marketStore.fixTpCents)
-    if (!tpCents || tpCents < 1 || tpCents > 99) {
-      toast.warning('Fix strategy: set TP Price (¢) first')
+    if (!tpCents || tpCents < 1 || tpCents > 98) {
+      toast.warning('Fix strategy: set TP Offset (+¢) first')
       return
     }
-  }
-
-  // All In Half: confirm, then place STRICT LIMIT at the clicked price (not market)
-  if (marketStore.activeStrategy === 'all_in_half') {
-    pendingAllInPrice.value = price
-    showAllInModal.value = true
-    return
   }
 
   const reqBody = buildOrderPayload(price)
@@ -425,44 +361,6 @@ const handlePlaceOrder = async (side, priceCents) => {
   }
 }
 
-const confirmAllIn = async () => {
-  if (allInBusy.value) return
-  if (!activeSubMarket.value) {
-    toast.error('Нет активного маркета')
-    showAllInModal.value = false
-    pendingAllInPrice.value = null
-    return
-  }
-
-  // CRITICAL: use the exact price the user clicked on the order book (strict limit)
-  const price = pendingAllInPrice.value
-  if (!price || price < 0.01 || price > 0.99) {
-    toast.error('Нет валидной limit-цены — кликни строку в стакане')
-    return
-  }
-
-  allInBusy.value = true
-  try {
-    toast.warning('⚡ ALL IN HALF — limit order...')
-    // bankroll = UI Volume; backend invests Volume / 2 at the clicked limit price
-    const reqBody = buildOrderPayload(price, 'all_in_half')
-    const data = await tradeApi.placeOrder(reqBody)
-    if (data.success) {
-      if (data.order_id) marketStore.setLastPlacedOrderId(data.order_id)
-      toast.success(`✅ ALL IN HALF LIMIT @ ${Math.round(price * 100)}¢`)
-      marketStore.loadPositions()
-      showAllInModal.value = false
-      pendingAllInPrice.value = null
-    } else {
-      toast.error(`❌ REJECTED: ${data.error}`)
-    }
-  } catch (e) {
-    toast.error(`❌ ${e.message || 'TIMEOUT: Node Unreachable'}`)
-  } finally {
-    allInBusy.value = false
-  }
-}
-
 const executeUndoLastOrder = async () => {
   if (!marketStore.lastPlacedOrderId) {
     toast.info('No last order to undo', { timeout: 1200 })
@@ -479,12 +377,6 @@ const executeUndoLastOrder = async () => {
   } catch (e) {
     toast.error(`❌ ${e.message || 'Undo failed'}`)
   }
-}
-
-const cancelAllIn = () => {
-  if (allInBusy.value) return
-  showAllInModal.value = false
-  pendingAllInPrice.value = null
 }
 
 const executeFlatten = async () => {

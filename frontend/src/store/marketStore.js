@@ -14,9 +14,9 @@ export const useMarketStore = defineStore('market', {
     tradeSize: 10,
     tpOffset: 5,
     slOffset: 15,
-    /** Absolute TP price in cents for Fix strategy (e.g. 55 = 55¢) */
-    fixTpCents: 55,
-    /** Active strategy key: custom | fix | draft_win | short_range | high_range | all_in_half */
+    /** Relative TP offset in cents for Fix strategy (e.g. 12 = +12¢ above entry) */
+    fixTpCents: 12,
+    /** Active strategy key: custom | fix | draft_win | short_range | high_range */
     activeStrategy: 'custom',
     /** @deprecated legacy alias — prefer activeStrategy */
     activePreset: 'custom',

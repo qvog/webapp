@@ -44,7 +44,6 @@ PRESET_STRATEGIES = frozenset(
         "draft_win",
         "short_range",
         "high_range",
-        "all_in_half",
     }
 )
 
@@ -95,8 +94,19 @@ def resolve_strategy_levels(
     strategy = (strategy or "custom").lower()
 
     if strategy == "fix":
-        # Manual TP from UI required; SL completely disabled
-        tp = round(float(req_tp), 2) if req_tp is not None else None
+        # req_tp is a relative offset in dollars (e.g. 0.12 = +12¢), not an absolute price.
+        # SL completely disabled.
+        if req_tp is None:
+            return None, None
+        offset = float(req_tp)
+        if offset <= 0:
+            return None, None
+        tp = round(entry + offset, 2)
+        # Hard ceiling: never place TP at or above 1.0
+        if tp >= 1.0:
+            tp = MAX_LIMIT_PRICE
+        else:
+            tp = min(MAX_LIMIT_PRICE, tp)
         return tp, None
 
     if strategy == "draft_win":
@@ -107,9 +117,6 @@ def resolve_strategy_levels(
 
     if strategy == "high_range":
         return round(entry + 0.06, 2), round(entry - 0.08, 2)
-
-    if strategy == "all_in_half":
-        return None, None
 
     # custom + legacy (4c / 8c / match / …)
     tp = round(float(req_tp), 2) if req_tp is not None else None
@@ -152,12 +159,8 @@ async def place_order(
     if req.bankroll < 5.00:
         return {"success": False, "error": f"Банкролл ({req.bankroll}$) меньше $5."}
 
-    # Size: all_in_half uses Volume / 2 (bankroll = UI Volume field); otherwise risk_percent
-    if strategy == "all_in_half":
-        actual_invest = round(float(req.bankroll) / 2.0, 2)
-    else:
-        target_invest = req.bankroll * (req.risk_percent / 100)
-        actual_invest = min(req.bankroll, max(5.00, target_invest))
+    target_invest = req.bankroll * (req.risk_percent / 100)
+    actual_invest = min(req.bankroll, max(5.00, target_invest))
 
     if actual_invest <= 0:
         return {"success": False, "error": "Размер позиции должен быть > 0."}
@@ -165,6 +168,7 @@ async def place_order(
     safe_size = round(actual_invest / safe_price, 2)
 
     # Backend-owned TP/SL for presets (rounded to 2dp)
+    # Fix: take_profit_price is a relative +¢ offset in dollars (e.g. 0.12 = +12¢)
     raw_tp, raw_sl = resolve_strategy_levels(
         strategy,
         safe_price,
@@ -172,14 +176,14 @@ async def place_order(
         req.stop_loss_price,
     )
     safe_tp = _clamp_price(raw_tp)
-    # fix requires a manual TP from the UI
+    # fix requires a manual relative TP offset from the UI
     if strategy == "fix" and safe_tp is None:
         return {
             "success": False,
-            "error": "Fix strategy requires a Take Profit price.",
+            "error": "Fix strategy requires a Take Profit offset (+¢).",
         }
     # SL may be below 0.01 after subtract — clamp to tradable floor when set
-    # fix / draft_win / all_in_half: SL is None → radar ignores
+    # fix / draft_win: SL is None → radar ignores
     if raw_sl is not None:
         sl_price = max(0.01, round(float(raw_sl), 2))
     else:

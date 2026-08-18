@@ -282,7 +282,8 @@ import { useMarketStore } from '../../store/marketStore'
 const marketStore = useMarketStore()
 
 const periodOptions = [
-  { id: '24h', label: '24H' },
+  // Rolling 24h window (not calendar-day) — avoids UTC vs local empty results
+  { id: 'today', label: 'Today' },
   { id: '7d', label: 'Week' },
   { id: '30d', label: 'Month' },
   { id: '90d', label: '3M' },

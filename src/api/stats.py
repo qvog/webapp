@@ -31,8 +31,11 @@ CLOSED_STATUSES = ("CLOSED_TP", "CLOSED_SL", "PANIC_SELL", "RESOLVED")
 # Cap used when gross loss is zero (infinite profit factor).
 INFINITE_PROFIT_FACTOR = 999.0
 
-# Time-range filters for stats (query param `period`)
+# Time-range filters for stats (query param `period`).
+# "today" is an alias for a rolling 24-hour window (not calendar-day UTC),
+# so local-timezone day boundaries never drop recent trades.
 PERIOD_DELTAS: dict[str, timedelta | None] = {
+    "today": timedelta(hours=24),
     "24h": timedelta(hours=24),
     "7d": timedelta(days=7),
     "30d": timedelta(days=30),
@@ -102,9 +105,16 @@ def _period_cutoff(period: str) -> datetime | None:
 
 
 def _filter_by_period(positions: list[Position], period: str) -> list[Position]:
+    """
+    Keep positions whose trade timestamp falls inside the rolling window.
+
+    Uses absolute Unix epoch seconds (UTC) so naive/aware SQLite datetimes and
+    local calendar-day boundaries cannot drop valid recent trades.
+    """
     cutoff = _period_cutoff(period)
     if cutoff is None:
         return list(positions)
+    cutoff_epoch = cutoff.timestamp()
     out: list[Position] = []
     for pos in positions:
         ts = _trade_ts(pos)
@@ -112,7 +122,10 @@ def _filter_by_period(positions: list[Position], period: str) -> list[Position]:
             # Keep undated rows so we never silently drop data
             out.append(pos)
             continue
-        if ts >= cutoff:
+        try:
+            if ts.timestamp() >= cutoff_epoch:
+                out.append(pos)
+        except (OverflowError, OSError, ValueError):
             out.append(pos)
     return out
 
@@ -410,7 +423,7 @@ def _normalize_period(period: str | None) -> str:
 def get_stats_summary(
     period: str = Query(
         DEFAULT_PERIOD,
-        description="Time window: 24h | 7d | 30d | 90d | 1y | all",
+        description="Time window: today|24h (rolling 24h) | 7d | 30d | 90d | 1y | all",
     ),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
@@ -442,7 +455,7 @@ def get_stats_summary(
 def get_stats_history(
     period: str = Query(
         DEFAULT_PERIOD,
-        description="Time window: 24h | 7d | 30d | 90d | 1y | all",
+        description="Time window: today|24h (rolling 24h) | 7d | 30d | 90d | 1y | all",
     ),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
