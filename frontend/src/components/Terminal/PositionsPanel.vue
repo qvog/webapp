@@ -41,6 +41,13 @@
             >
               {{ marketStore.getTeamNameFromToken(pos.token_id) }}
             </span>
+            <!-- Strategy badge next to token/team name -->
+            <span
+              class="shrink-0 text-[8px] px-1.5 py-0.5 rounded font-bold font-mono uppercase tracking-wider bg-zinc-800/80 text-zinc-400 border border-zinc-700/60"
+              :title="'Strategy: ' + formatStrategy(pos.strategy)"
+            >
+              {{ formatStrategy(pos.strategy) }}
+            </span>
           </div>
 
           <div class="flex items-center shrink-0">
@@ -57,16 +64,6 @@
               {{ pos.liveDiff > 0 ? '+' : '' }}{{ pos.liveDiff }}¢
             </span>
           </div>
-        </div>
-
-        <!-- Strategy badge -->
-        <div class="flex items-center">
-          <span
-            class="text-[9px] px-1.5 py-0.5 rounded font-bold font-mono uppercase tracking-wider bg-zinc-800/80 text-zinc-400 border border-zinc-700/60"
-            :title="'Strategy: ' + formatStrategy(pos.strategy)"
-          >
-            {{ formatStrategy(pos.strategy) }}
-          </span>
         </div>
 
         <div class="text-[10px] flex flex-col gap-1.5 text-zinc-500 font-mono">
@@ -153,10 +150,10 @@ function shortOrderId(orderId) {
   return String(orderId || '').slice(-4)
 }
 
-/** Clean uppercase strategy label for the badge */
+/** Clean uppercase strategy label for the badge (e.g. SHORT_RANGE, FIX) */
 function formatStrategy(strategy) {
   if (!strategy) return 'CUSTOM'
-  return String(strategy).replace(/_/g, ' ').toUpperCase()
+  return String(strategy).toUpperCase()
 }
 
 /**
