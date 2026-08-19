@@ -1,177 +1,95 @@
 <template>
-  <div :class="['h-screen w-full font-sans flex flex-col overflow-hidden transition-colors duration-300', marketStore.isDark ? 'bg-black text-gray-200' : 'bg-gray-100 text-gray-900']">
-    
-    <header :class="['h-14 shrink-0 px-4 flex justify-between items-center z-10 border-b', marketStore.isDark ? 'bg-[#0a0a0a] border-zinc-800' : 'bg-white border-gray-300']">
-      <div class="flex items-center gap-4">
-        <button v-if="currentEvent" @click="closeTerminal" :class="['px-3 py-1 rounded text-xs font-bold border transition-colors', marketStore.isDark ? 'border-[#00e5ff] text-[#00e5ff] hover:bg-[#00e5ff] hover:text-black' : 'border-[#00e5ff] text-[#00b8cc] hover:bg-[#00e5ff] hover:text-white']">
-          ← BACK
-        </button>
-        <h1 class="text-lg font-bold">{{ currentEvent ? currentEvent.title : 'qScalp' }}</h1>
-      </div>
-      
-      <button @click="marketStore.isDark = !marketStore.isDark" :class="['px-4 py-1.5 rounded-full text-xs font-bold border transition-colors flex gap-2 items-center', marketStore.isDark ? 'border-[#00e5ff] text-[#00e5ff] hover:bg-[#00e5ff]/10' : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50 shadow-sm']">
-        <span v-if="marketStore.isDark">🌙 Dark Mode</span>
-        <span v-else>☀️ Light Mode</span>
-      </button>
-    </header>
+  <div class="flex flex-1 min-w-0 h-full overflow-hidden" ref="terminalRoot">
+    <SubcategoryNav v-if="!currentEvent" />
 
-    <div v-if="currentEvent" class="flex-1 flex overflow-hidden p-2 gap-2">
-      
-      <div class="w-64 flex flex-col gap-2 shrink-0">
-        <div :class="['border rounded p-3 shrink-0', marketStore.isDark ? 'bg-[#0a0a0a] border-zinc-800' : 'bg-white border-gray-300 shadow-sm']">
-          <div class="flex justify-between items-center mb-3">
-            <h3 class="font-bold text-gray-500 text-[10px] tracking-wider">Options</h3>
-            <div :class="['flex rounded border p-0.5', marketStore.isDark ? 'bg-black border-zinc-800' : 'bg-gray-100 border-gray-300']">
-              <button @click="marketStore.tradingMode = 'custom'" :class="['px-2 py-1 text-[10px] font-bold rounded transition-colors', marketStore.tradingMode === 'custom' ? (marketStore.isDark ? 'bg-[#00e5ff] text-black' : 'bg-[#00e5ff] text-white') : 'text-gray-500']">Custom</button>
-              <button @click="marketStore.tradingMode = 'presets'" :class="['px-2 py-1 text-[10px] font-bold rounded transition-colors', marketStore.tradingMode === 'presets' ? (marketStore.isDark ? 'bg-[#00e5ff] text-black' : 'bg-[#00e5ff] text-white') : 'text-gray-500']">Presets</button>
-            </div>
-          </div>
+    <main class="flex-1 flex flex-col min-w-0 bg-gradient-to-br from-[#000000] via-[#030303] to-[#001012]">
+      <FavoritesBar :active-event-id="currentEvent?.event_id" @open="openEvent" />
 
-          <div class="mb-3">
-            <label class="block text-[10px] text-gray-500 mb-1">Value (USDC)</label>
-            <input v-model="marketStore.tradeSize" type="number" :class="['w-full border rounded px-2 py-1.5 text-sm font-bold outline-none focus:border-[#00e5ff]', marketStore.isDark ? 'bg-black border-zinc-800 text-white' : 'bg-white border-gray-300 text-black']" />
-          </div>
-
-          <div v-if="marketStore.tradingMode === 'custom'" class="flex gap-2">
-            <div class="flex-1">
-              <label class="block text-[10px] text-gray-500 mb-1">Take Profit</label>
-              <input v-model="marketStore.tpOffset" type="number" :class="['w-full border rounded px-2 py-1.5 text-sm font-bold outline-none text-green-500', marketStore.isDark ? 'bg-black border-zinc-800' : 'bg-white border-gray-300']" />
-            </div>
-            <div class="flex-1">
-              <label class="block text-[10px] text-gray-500 mb-1">Stop Loss</label>
-              <input v-model="marketStore.slOffset" type="number" :class="['w-full border rounded px-2 py-1.5 text-sm font-bold outline-none text-red-500', marketStore.isDark ? 'bg-black border-zinc-800' : 'bg-white border-gray-300']" />
-            </div>
-          </div>
-
-          <div v-if="marketStore.tradingMode === 'presets'" class="grid grid-cols-2 gap-2">
-            <button @click="marketStore.activePreset = '4c'" :class="['p-2 rounded text-xs font-bold border transition-colors', marketStore.activePreset === '4c' ? (marketStore.isDark ? 'bg-[#00e5ff] border-[#00e5ff] text-black' : 'bg-[#00e5ff] border-[#00e5ff] text-white') : (marketStore.isDark ? 'bg-black border-zinc-800 text-gray-500' : 'bg-gray-50 border-gray-300 text-gray-600')]">4c</button>
-            <button @click="marketStore.activePreset = '8c'" :class="['p-2 rounded text-xs font-bold border transition-colors', marketStore.activePreset === '8c' ? (marketStore.isDark ? 'bg-[#00e5ff] border-[#00e5ff] text-black' : 'bg-[#00e5ff] border-[#00e5ff] text-white') : (marketStore.isDark ? 'bg-black border-zinc-800 text-gray-500' : 'bg-gray-50 border-gray-300 text-gray-600')]">8c</button>
-          </div>
-        </div>
-
-        <div :class="['border rounded p-3 flex-1 overflow-y-auto custom-scrollbar', marketStore.isDark ? 'bg-[#0a0a0a] border-zinc-800' : 'bg-white border-gray-300 shadow-sm']">
-          <h3 class="font-bold text-gray-500 text-[10px] mb-2 tracking-wider">Lines ({{ currentEvent.sub_markets.length }})</h3>
-          <div class="flex flex-col gap-2">
-            <button 
-              v-for="sub in currentEvent.sub_markets" :key="sub.condition_id"
-              @click="openSubMarket(sub)"
-              :class="['w-full p-2 rounded text-left text-xs transition-colors border', activeSubMarket?.condition_id === sub.condition_id ? (marketStore.isDark ? 'border-[#00e5ff] bg-[#00e5ff]/10 text-white' : 'border-[#00e5ff] bg-cyan-50 text-black font-bold') : (marketStore.isDark ? 'border-transparent bg-black text-gray-400 hover:bg-zinc-900' : 'border-gray-200 bg-gray-50 text-gray-600 hover:bg-gray-100')]"
-            >
-              <span class="block whitespace-normal break-words leading-snug">
-                {{ sub.question }}
-              </span>
-            </button>
-          </div>
-        </div>
-      </div>
-
-      <div class="flex-1 relative flex flex-col min-w-[350px]">
-        <div v-if="isConnecting" class="absolute inset-0 z-50 flex items-center justify-center backdrop-blur-sm rounded-lg" :class="marketStore.isDark ? 'bg-black/80' : 'bg-white/80'">
-          <span class="text-[#00e5ff] text-sm font-bold animate-pulse">CONNECTION...</span>
-        </div>
-        
-        <div v-if="activeSubMarket" class="mb-2 flex items-center justify-between border-b pb-2" :class="marketStore.isDark ? 'border-gray-800' : 'border-gray-200'">
-          <h2 class="text-sm font-bold truncate pr-4" :class="marketStore.isDark ? 'text-gray-200' : 'text-gray-800'" :title="activeSubMarket.question">
-            {{ activeSubMarket.question }}
-          </h2>
-          <div :class="['px-2 py-0.5 rounded text-[11px] font-mono font-bold border transition-colors whitespace-nowrap', spreadBadgeClass]">
-            SPREAD: {{ activeSpreadCents }}¢
-          </div>
-        </div>
-
-        <OrderBook 
-          ref="orderBookRef"
-          v-if="activeSubMarket"
-          :isDark="marketStore.isDark"
-          v-model:activeTeam="activeTeam"
-          :team1Name="activeSubMarket.out1"
-          :team2Name="activeSubMarket.out2"
-          :ladderYes="ladderYes"
-          :ladderNo="ladderNo"
-          :bestBid="activeTeam === 1 ? bestBidYes : bestBidNo" 
-          :bestAsk="activeTeam === 1 ? bestAskYes : bestAskNo"
-          :currentTokenId="activeTeam === 1 ? activeSubMarket.token_id_yes : activeSubMarket.token_id_no"
-          @placeOrder="handlePlaceOrder"
+      <div v-if="currentEvent" class="flex-1 flex overflow-hidden p-3 gap-3">
+        <TradingPanel
+          ref="tradingPanelRef"
+          :event="currentEvent"
+          :active-sub="activeSubMarket"
+          @close="closeTerminal"
+          @select-sub="openSubMarket"
         />
-      </div>
 
-      <div :class="['w-64 border rounded p-3 flex flex-col shrink-0', marketStore.isDark ? 'bg-[#0a0a0a] border-zinc-800' : 'bg-white border-gray-300 shadow-sm']">
-        <div class="flex justify-between items-center mb-2"> 
-          <h3 class="font-bold text-gray-500 text-[10px] tracking-wider">Open Orders</h3>
-          <button @click="marketStore.loadPositions()" class="text-[10px] text-[#00e5ff] hover:underline transition-colors">↻RESET</button>
-        </div>
-        
-        <div class="flex-1 overflow-y-auto custom-scrollbar space-y-2 pr-1">
-          <div v-if="livePositions.length === 0" class="text-center text-gray-500 text-xs mt-10">Empty</div>
-          
-          <div v-for="pos in livePositions" :key="pos.order_id" :class="['border p-2 rounded flex flex-col gap-1.5 transition-colors', marketStore.isDark ? 'bg-black border-zinc-800 hover:border-zinc-700' : 'bg-gray-50 border-gray-200 hover:border-gray-300']">
-            
-            <div class="flex justify-between items-center">
-              <span class="font-bold text-xs truncate max-w-[120px]" :title="marketStore.getTeamNameFromToken(pos.token_id)">
-                {{ marketStore.getTeamNameFromToken(pos.token_id) }}
-              </span>
-              
-              <div class="flex items-center">
-                <span v-if="pos.status === 'PENDING'" class="text-[9px] px-1.5 py-0.5 rounded font-bold bg-yellow-500/20 text-yellow-500 border border-yellow-500/30 animate-pulse uppercase tracking-wider">
-                  ⏳ In order book
-                </span>
-                <span v-else :class="['font-bold text-xs transition-colors', pos.liveDiff >= 0 ? 'text-green-500' : 'text-red-500']">
-                  {{ pos.liveDiff > 0 ? '+' : '' }}{{ pos.liveDiff }}¢
-                </span>
-              </div>
-            </div>
-            
-            <div class="text-[10px] flex flex-col gap-1" :class="marketStore.isDark ? 'text-gray-400' : 'text-gray-500'">
-              <div class="flex justify-between px-1.5 py-1 rounded" :class="marketStore.isDark ? 'bg-[#161b22]' : 'bg-white shadow-sm border border-gray-100'">
-                <span>BUY: <b :class="marketStore.isDark ? 'text-white' : 'text-black'">{{ Math.round(pos.entry_price * 100) }}¢</b></span>
-                <span>VOL: <b :class="marketStore.isDark ? 'text-white' : 'text-black'">{{ pos.size.toFixed(1) }}</b></span>
-              </div>
-              
-              <div class="flex justify-between px-1.5 font-mono">
-                <span :class="marketStore.isDark ? 'text-green-400' : 'text-green-600'">
-                  TP: <b>{{ pos.tp_price ? Math.round(pos.tp_price * 100) + '¢' : '--' }}</b>
-                </span>
-                <span :class="marketStore.isDark ? 'text-red-400' : 'text-red-600'">
-                  SL: <b>{{ pos.sl_trigger_price ? Math.round(pos.sl_trigger_price * 100) + '¢' : '--' }}</b>
-                </span>
-              </div>
-            </div>
-            
-            <button @click="executePanicSell(pos.order_id)" class="w-full mt-1 bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white text-[10px] py-1 rounded transition-colors font-bold border border-red-500/30">
-              {{ pos.status === 'PENDING' ? 'CANCEL ORDER' : 'MARKET DUMP' }}
-            </button>
+
+        <div class="flex-1 relative flex flex-col min-w-[350px]">
+          <div
+            v-if="isConnecting"
+            class="absolute inset-0 z-50 flex items-center justify-center backdrop-blur-sm bg-[#050505]/80 rounded-2xl border border-zinc-800"
+          >
+            <span class="text-[#00e5ff] text-sm font-bold font-mono animate-pulse tracking-widest uppercase">
+              Connecting to L2 Stream...
+            </span>
           </div>
-          
-        </div>
-      </div>
-    </div>
 
-    <div v-else class="flex-1 overflow-y-auto p-6">
-      <div class="max-w-6xl mx-auto">
-        <h2 class="text-2xl font-bold mb-6">Dota 2</h2>
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          <div v-for="match in marketStore.matches" :key="match.event_id" :class="['border p-4 rounded-lg flex flex-col justify-between h-40 transition-colors', marketStore.isDark ? 'bg-[#0a0a0a] border-zinc-800 hover:border-zinc-600' : 'bg-white border-gray-300 hover:border-gray-400 shadow-sm']">
-            <div>
-              <span class="text-[10px] text-gray-500">{{ new Date(match.start_date).toLocaleDateString() }}</span>
-              <h3 class="font-bold text-sm mt-1 line-clamp-2" :class="marketStore.isDark ? 'text-white' : 'text-black'">{{ match.title }}</h3>
-            </div>
-            <div class="flex justify-between items-end mt-2">
-              <div class="text-xs text-gray-500">Vol: <span class="font-bold" :class="marketStore.isDark ? 'text-white' : 'text-black'">${{ formatVolume(match.total_volume) }}</span></div>
-              <button @click="openEvent(match)" :class="['px-3 py-1.5 rounded text-xs font-bold transition-colors', marketStore.isDark ? 'bg-[#00e5ff] text-black hover:bg-[#00b8cc]' : 'bg-[#00e5ff] text-white hover:bg-[#00b8cc] shadow-md']">
-                GO
-              </button>
+          <div
+            v-if="activeSubMarket"
+            class="mb-3 flex items-center justify-between border-b border-zinc-800/60 pb-3 px-2"
+          >
+            <h2
+              class="text-base font-bold truncate pr-4 text-gray-100 tracking-tight"
+              :title="activeSubMarket.question"
+            >
+              {{ activeSubMarket.question }}
+            </h2>
+            <div class="flex items-center gap-2">
+              <div
+                :class="[
+                  'px-2.5 py-1 rounded-md text-[11px] font-mono font-bold border transition-colors whitespace-nowrap',
+                  strategyBadgeClass,
+                ]"
+              >
+                {{ strategyLabel }}
+              </div>
+              <div
+                :class="[
+                  'px-2.5 py-1 rounded-md text-[11px] font-mono font-bold border transition-colors whitespace-nowrap',
+                  spreadBadgeClass,
+                ]"
+              >
+                SPREAD: {{ activeSpreadCents }}¢
+              </div>
             </div>
           </div>
+
+          <OrderBook
+            ref="orderBookRef"
+            v-if="activeSubMarket"
+            :isDark="true"
+            v-model:activeTeam="activeTeam"
+            :team1Name="activeSubMarket.out1"
+            :team2Name="activeSubMarket.out2"
+            :ladderYes="ladderYes"
+            :ladderNo="ladderNo"
+            :currentTokenId="activeTeam === 1 ? activeSubMarket.token_id_yes : activeSubMarket.token_id_no"
+            :imbalancePercent="activeImbalance"
+            :maxBidSize="activeMaxBidSize"
+            :maxAskSize="activeMaxAskSize"
+            @placeOrder="handlePlaceOrder"
+          />
         </div>
+
+        <PositionsPanel :positions="livePositions" @panic="executePanicSell" />
       </div>
-    </div>
+
+      <MarketGrid v-else @open="openEvent" />
+    </main>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted, nextTick, computed } from 'vue'
+import { ref, onMounted, onUnmounted, nextTick, computed, watch } from 'vue'
 import { useToast } from 'vue-toastification'
+
 import OrderBook from './Terminal/OrderBook.vue'
+import SubcategoryNav from './Terminal/SubcategoryNav.vue'
+import FavoritesBar from './Terminal/FavoritesBar.vue'
+import MarketGrid from './Terminal/MarketGrid.vue'
+import TradingPanel from './Terminal/TradingPanel.vue'
+import PositionsPanel from './Terminal/PositionsPanel.vue'
 
 import { useMarketStore } from '../store/marketStore'
 import { useOrderBook } from '../composables/useOrderBook'
@@ -180,162 +98,396 @@ import { tradeApi } from '../api/tradeService'
 const toast = useToast()
 const marketStore = useMarketStore()
 
-// 1. СНАЧАЛА инициализируем переменные стакана
-const { 
-  ladderYes, ladderNo, 
-  spreadYes, spreadNo, 
-  bestBidYes, bestBidNo, 
-  isConnecting, connectToMarket, disconnect 
+const {
+  ladderYes,
+  ladderNo,
+  spreadYes,
+  spreadNo,
+  bestBidYes,
+  bestBidNo,
+  bestAskYes,
+  bestAskNo,
+  imbalanceYes,
+  imbalanceNo,
+  maxBidSizeYes,
+  maxAskSizeYes,
+  maxBidSizeNo,
+  maxAskSizeNo,
+  isConnecting,
+  connectToMarket,
+  disconnect,
 } = useOrderBook()
 
-// 2. ЗАТЕМ объявляем локальные переменные
-const currentEvent = ref(null)
+/** Open terminal event — sourced from Pinia so logo / global sidebar can navigate. */
+const currentEvent = computed(() => marketStore.activeEvent)
 const activeSubMarket = ref(null)
 const activeTeam = ref(1)
 const orderBookRef = ref(null)
+const tradingPanelRef = ref(null)
+const terminalRoot = ref(null)
+let positionsTimer = null
 
-// 3. И ТОЛЬКО ПОТОМ используем их в Computed (чтобы не было ошибок загрузки)
+const STRATEGY_LABELS = {
+  custom: 'CUSTOM',
+  fix: 'FIX',
+  draft_win: 'DRAFT WIN',
+  short_range: 'SHORT RANGE',
+  high_range: 'HIGH RANGE',
+}
+
+const strategyLabel = computed(
+  () => STRATEGY_LABELS[marketStore.activeStrategy] || marketStore.activeStrategy?.toUpperCase()
+)
+
+const strategyBadgeClass = computed(() => {
+  if (marketStore.activeStrategy === 'custom') {
+    return 'bg-zinc-800/60 text-zinc-400 border-zinc-700'
+  }
+  return 'bg-[#00e5ff]/10 text-[#00e5ff] border-[#00e5ff]/30'
+})
+
 const activeSpreadCents = computed(() => {
   const sp = activeTeam.value === 1 ? spreadYes.value : spreadNo.value
   return Math.round(sp * 100)
 })
 
+const activeImbalance = computed(() =>
+  activeTeam.value === 1 ? imbalanceYes.value : imbalanceNo.value
+)
+const activeMaxBidSize = computed(() =>
+  activeTeam.value === 1 ? maxBidSizeYes.value : maxBidSizeNo.value
+)
+const activeMaxAskSize = computed(() =>
+  activeTeam.value === 1 ? maxAskSizeYes.value : maxAskSizeNo.value
+)
+
 const spreadBadgeClass = computed(() => {
   const cents = activeSpreadCents.value
-  if (cents <= 2) return 'bg-green-500/20 text-green-500 border-green-500/50'
-  if (cents <= 5) return 'bg-yellow-500/20 text-yellow-500 border-yellow-500/50'
-  return 'bg-red-500/20 text-red-500 border-red-500/50'
+  if (cents <= 2) return 'bg-[#00e5ff]/10 text-[#00e5ff] border-[#00e5ff]/30'
+  if (cents <= 5) return 'bg-yellow-500/10 text-yellow-400 border-yellow-500/30'
+  return 'bg-indigo-500/10 text-indigo-400 border-indigo-500/30'
 })
 
-// 🎯 ЖИВОЙ PnL (Связан с позициями и стаканом)
-const livePositions = computed(() => {
-  return marketStore.openPositions.map(pos => {
-    // Если позиция закрыта, берем финальный профит
-    if (pos.status === 'CLOSED_TP' || pos.status === 'CLOSED_SL' || pos.status === 'RESOLVED') {
-      const exitP = pos.exit_price || pos.entry_price;
-      const profitCents = Math.round((exitP - pos.entry_price) * 100);
-      return { ...pos, liveDiff: profitCents };
+const livePositions = computed(() =>
+  marketStore.openPositions.map((pos) => {
+    if (['CLOSED_TP', 'CLOSED_SL', 'RESOLVED'].includes(pos.status)) {
+      const exitP = pos.exit_price || pos.entry_price
+      return { ...pos, liveDiff: Math.round((exitP - pos.entry_price) * 100) }
     }
-
-    // Если открыта — считаем по живому стакану
-    let currentMarketPrice = 0;
-    
+    let currentMarketPrice = pos.entry_price
     if (activeSubMarket.value) {
       if (pos.token_id === activeSubMarket.value.token_id_yes) {
-        currentMarketPrice = bestBidYes.value;
+        currentMarketPrice = bestBidYes.value
       } else if (pos.token_id === activeSubMarket.value.token_id_no) {
-        currentMarketPrice = bestBidNo.value;
+        currentMarketPrice = bestBidNo.value
       }
     }
-    
-    if (!currentMarketPrice) currentMarketPrice = pos.entry_price;
+    return {
+      ...pos,
+      liveDiff: Math.round((currentMarketPrice - pos.entry_price) * 100),
+      currentMarketPrice,
+    }
+  })
+)
 
-    const profitCents = Math.round((currentMarketPrice - pos.entry_price) * 100);
-    return { ...pos, liveDiff: profitCents, currentMarketPrice };
-  });
-});
+const activeTokenId = computed(() => {
+  if (!activeSubMarket.value) return null
+  return activeTeam.value === 1
+    ? activeSubMarket.value.token_id_yes
+    : activeSubMarket.value.token_id_no
+})
 
-const handleKeydown = (e) => {
-  if (e.code === 'Space' && currentEvent.value && e.target.tagName !== 'INPUT') {
-    e.preventDefault()
-    orderBookRef.value?.scrollToSpread()
+const currentMarketPrice = computed(() => {
+  // Prefer best ask for market-like entry buys
+  const ask = activeTeam.value === 1 ? bestAskYes.value : bestAskNo.value
+  const bid = activeTeam.value === 1 ? bestBidYes.value : bestBidNo.value
+  const p = Number(ask) > 0 && Number(ask) < 1 ? Number(ask) : Number(bid)
+  return Math.round(p * 100) / 100
+})
+
+function focusTerminal() {
+  tradingPanelRef.value?.focusTerminal?.()
+  terminalRoot.value?.focus?.()
+}
+
+function applyHotkeyPreset(strategy, volume) {
+  marketStore.activeStrategy = strategy
+  marketStore.activePreset = strategy
+  marketStore.tradingMode = 'presets'
+  marketStore.tradeSize = volume
+  tradingPanelRef.value?.applyStrategy?.(strategy, volume)
+  focusTerminal()
+  toast.info(`${STRATEGY_LABELS[strategy] || strategy} · vol $${volume}`, { timeout: 1500 })
+}
+
+/**
+ * Build POST /api/order payload.
+ * For presets, TP/SL are left null — backend resolves levels.
+ * Fix: sends relative +¢ offset in dollars (e.g. 0.12); backend does entry + offset, cap 0.99.
+ * All orders are strict limit at the provided price.
+ */
+function buildOrderPayload(priceDollars, strategyOverride = null) {
+  const strategy = strategyOverride || marketStore.activeStrategy || 'custom'
+  const targetToken = activeTokenId.value
+  const price = Math.round(Number(priceDollars) * 100) / 100
+
+  let takeProfit = null
+  let stopLoss = null
+
+  if (strategy === 'custom') {
+    const priceCents = Math.round(price * 100)
+    const tpOff = Number(marketStore.tpOffset)
+    const slOff = Number(marketStore.slOffset)
+    if (tpOff > 0) takeProfit = Math.min(0.99, Math.round((priceCents + tpOff)) / 100)
+    if (slOff > 0) stopLoss = Math.max(0.01, Math.round((priceCents - slOff)) / 100)
+  } else if (strategy === 'fix') {
+    // Relative offset in dollars for backend: input 12 → 0.12 (+12¢)
+    const tpOffCents = Number(marketStore.fixTpCents)
+    if (tpOffCents > 0 && tpOffCents < 100) {
+      takeProfit = Math.round(tpOffCents) / 100
+    }
+    stopLoss = null
+  }
+
+  return {
+    token_id: targetToken,
+    condition_id: activeSubMarket.value.condition_id,
+    price,
+    side: 'BUY',
+    bankroll: Number(marketStore.tradeSize),
+    risk_percent: 100,
+    is_custom_limit: true,
+    take_profit_price: takeProfit,
+    stop_loss_price: stopLoss,
+    strategy,
   }
 }
 
-const formatVolume = (val) => val >= 1000 ? (val / 1000).toFixed(1) + 'K' : Math.round(val)
+const handleKeydown = (e) => {
+  // Ctrl+Z / Meta+Z → undo last placed order (panic_sell)
+  if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z') && !e.shiftKey) {
+    // Don't hijack undo inside text fields
+    const tag = (e.target && e.target.tagName) || ''
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || e.target?.isContentEditable) {
+      return
+    }
+    e.preventDefault()
+    e.stopPropagation()
+    executeUndoLastOrder()
+    return
+  }
+
+  // Space → scroll to spread (existing)
+  if (
+    e.code === 'Space' &&
+    currentEvent.value &&
+    e.target.tagName !== 'INPUT' &&
+    e.target.tagName !== 'SELECT' &&
+    e.target.tagName !== 'TEXTAREA'
+  ) {
+    e.preventDefault()
+    orderBookRef.value?.scrollToSpread()
+    return
+  }
+
+  // Global trading hotkeys — F1–F3 presets, F10 flatten
+  const key = e.key
+  const isTradeHotkey = ['F1', 'F2', 'F3', 'F10'].includes(key)
+  if (!isTradeHotkey) return
+
+  e.preventDefault()
+  e.stopPropagation()
+
+  if (key === 'F1') {
+    applyHotkeyPreset('draft_win', 10)
+    return
+  }
+  if (key === 'F2') {
+    applyHotkeyPreset('short_range', 20)
+    return
+  }
+  if (key === 'F3') {
+    applyHotkeyPreset('high_range', 20)
+    return
+  }
+  if (key === 'F10') {
+    executeFlatten()
+  }
+}
 
 const closeTerminal = () => {
   disconnect()
-  currentEvent.value = null
   activeSubMarket.value = null
+  marketStore.closeActiveMarket()
 }
 
 const openEvent = (match) => {
-  currentEvent.value = match
-  if (match.sub_markets.length > 0) openSubMarket(match.sub_markets[0])
+  if (!match) return
+  marketStore.setActiveMarket(match)
 }
 
-const openSubMarket = (sub) => {
+/**
+ * Pick sub-market (and YES/NO side) for a focus token, else first sub.
+ * @returns {{ sub: object|null, team: 1|2 }}
+ */
+function resolveFocusForEvent(match, focusTokenId) {
+  const subs = match?.sub_markets || []
+  if (!subs.length) return { sub: null, team: 1 }
+  if (focusTokenId) {
+    const tid = String(focusTokenId)
+    for (const sub of subs) {
+      const yes = sub.token_id_yes != null ? String(sub.token_id_yes) : ''
+      const no = sub.token_id_no != null ? String(sub.token_id_no) : ''
+      if (yes === tid) return { sub, team: 1 }
+      if (no === tid) return { sub, team: 2 }
+    }
+  }
+  return { sub: subs[0], team: 1 }
+}
+
+const openSubMarket = (sub, team = null) => {
+  if (!sub) {
+    activeSubMarket.value = null
+    disconnect()
+    return
+  }
   activeSubMarket.value = sub
+  if (team === 1 || team === 2) activeTeam.value = team
   connectToMarket(sub, () => {
     nextTick(() => orderBookRef.value?.scrollToSpread())
   })
 }
 
+/** Sync local orderbook whenever Pinia opens/refocuses a market. */
+watch(
+  () => [marketStore.activeEvent, marketStore.focusRequestId],
+  ([match]) => {
+    if (!match) {
+      disconnect()
+      activeSubMarket.value = null
+      return
+    }
+    const focusToken = marketStore.consumePendingFocusTokenId()
+    const { sub, team } = resolveFocusForEvent(match, focusToken)
+    openSubMarket(sub, team)
+  },
+  { immediate: true }
+)
+
 const handlePlaceOrder = async (side, priceCents) => {
   if (side === 'SELL') return
-  const targetToken = activeTeam.value === 1 ? activeSubMarket.value.token_id_yes : activeSubMarket.value.token_id_no
-  
-  let finalTpCents = null
-  let finalSlCents = null  
-  let finalStrategy = 'custom'
+  if (!activeSubMarket.value) return
 
-  if (marketStore.tradingMode === 'custom') {
-    finalTpCents = marketStore.tpOffset > 0 ? priceCents + marketStore.tpOffset : null
-    finalSlCents = marketStore.slOffset > 0 ? priceCents - marketStore.slOffset : null
-  } else {
-    finalStrategy = marketStore.activePreset
-    if (marketStore.activePreset === '4c') {
-      finalTpCents = priceCents + 4
-      finalSlCents = priceCents - 12
-    }
-    if (marketStore.activePreset === '8c') {
-      finalTpCents = priceCents + 8
-      finalSlCents = priceCents - 12
+  const price = Math.round(Number(priceCents)) / 100.0
+  if (!price || price < 0.01 || price > 0.99) {
+    toast.error('Invalid limit price')
+    return
+  }
+
+  // Fix strategy requires a relative +¢ TP offset before placing
+  if (marketStore.activeStrategy === 'fix') {
+    const tpCents = Number(marketStore.fixTpCents)
+    if (!tpCents || tpCents < 1 || tpCents > 98) {
+      toast.warning('Fix strategy: set TP Offset (+¢) first')
+      return
     }
   }
 
-  const reqBody = {
-    token_id: targetToken,
-    condition_id: activeSubMarket.value.condition_id,
-    price: priceCents / 100.0,
-    side: "BUY", 
-    bankroll: marketStore.tradeSize, 
-    risk_percent: 100, 
-    is_custom_limit: true,
-    take_profit_price: finalTpCents ? Math.min(0.99, finalTpCents / 100.0) : null,
-    stop_loss_price: finalSlCents ? Math.max(0.01, finalSlCents / 100.0) : null,
-    strategy: finalStrategy
-  }
-  
+  const reqBody = buildOrderPayload(price)
+
   try {
-    toast.info(`Order Submission: ${priceCents}¢...`)
+    toast.info('Transmitting order...')
     const data = await tradeApi.placeOrder(reqBody)
     if (data.success) {
-      toast.success(`✅ Success! BUY ${priceCents}¢`)
+      if (data.order_id) marketStore.setLastPlacedOrderId(data.order_id)
+      toast.success(`✅ LIMIT ${Math.round(price * 100)}¢ · ${reqBody.strategy}`)
       marketStore.loadPositions()
     } else {
-      toast.error(`❌ Exchange Rejection: ${data.error}`)
+      toast.error(`❌ REJECTED: ${data.error}`)
     }
   } catch (e) {
-    toast.error("❌ Network Error: Server Not Responding")
+    toast.error(`❌ ${e.message || 'TIMEOUT: Node Unreachable'}`)
+  }
+}
+
+const executeUndoLastOrder = async () => {
+  if (!marketStore.lastPlacedOrderId) {
+    toast.info('No last order to undo', { timeout: 1200 })
+    return
+  }
+  try {
+    toast.warning('↩ Undo last order...')
+    const data = await marketStore.undoLastOrder()
+    if (data.success) {
+      toast.success('Last order canceled')
+    } else if (!data.skipped) {
+      toast.error(`❌ Undo: ${data.error}`)
+    }
+  } catch (e) {
+    toast.error(`❌ ${e.message || 'Undo failed'}`)
+  }
+}
+
+const executeFlatten = async () => {
+  const tokenId = activeTokenId.value
+  if (!tokenId) {
+    toast.warning('Нет активного токена для Flatten (F10)')
+    return
+  }
+  try {
+    toast.warning('⚡ FLATTEN — closing all OPEN on token...')
+    const data = await tradeApi.flatten(tokenId)
+    if (data.success) {
+      toast.success(`✅ ${data.message || 'Flatten done'}`)
+      marketStore.loadPositions()
+    } else {
+      toast.error(`❌ FLATTEN: ${data.error}`)
+    }
+  } catch (e) {
+    toast.error(`❌ ${e.message || 'TIMEOUT: Node Unreachable'}`)
   }
 }
 
 const executePanicSell = async (orderId) => {
   try {
-    toast.warning("⚡ Market Dump Initiation...")
+    toast.warning('⚡ Market Dump Initiation...')
     const data = await tradeApi.panicSell(orderId)
     if (data.success) {
+      if (marketStore.lastPlacedOrderId === orderId) {
+        marketStore.clearLastPlacedOrderId()
+      }
       toast.success(`✅ ${data.message}`)
       marketStore.loadPositions()
     } else {
-      toast.error(`❌ Error Dump: ${data.error}`)
+      toast.error(`❌ ERROR: ${data.error}`)
     }
-  } catch(e) {
-    toast.error("❌ Network Error With Dump")
+  } catch (e) {
+    toast.error(`❌ ${e.message || 'TIMEOUT: Node Unreachable'}`)
   }
 }
 
-onMounted(() => { 
-  window.addEventListener('keydown', handleKeydown)
+onMounted(() => {
+  // Capture phase so F-keys win over browser chrome where possible
+  window.addEventListener('keydown', handleKeydown, true)
   marketStore.loadMatches()
+  // Positions are also polled by GlobalPositionsSidebar; keep a local sync for live PnL
   marketStore.loadPositions()
-  setInterval(() => { marketStore.loadPositions() }, 3000) 
+  positionsTimer = setInterval(() => marketStore.loadPositions(), 3000)
 })
 
-onUnmounted(() => { 
-  window.removeEventListener('keydown', handleKeydown)
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleKeydown, true)
+  if (positionsTimer) clearInterval(positionsTimer)
   disconnect()
 })
 </script>
+
+<style>
+.hide-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.hide-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+</style>

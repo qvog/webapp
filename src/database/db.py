@@ -26,6 +26,22 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()
 
+
+def ensure_schema() -> None:
+    """Create tables and apply lightweight SQLite column migrations."""
+    Base.metadata.create_all(bind=engine)
+    # SQLite create_all does not add new columns to existing tables.
+    with engine.begin() as conn:
+        cols = {
+            row[1]
+            for row in conn.exec_driver_sql("PRAGMA table_info(positions)").fetchall()
+        }
+        if cols and "tp_order_id" not in cols:
+            conn.exec_driver_sql(
+                "ALTER TABLE positions ADD COLUMN tp_order_id VARCHAR"
+            )
+
+
 def get_db():
     db = SessionLocal()
     try:

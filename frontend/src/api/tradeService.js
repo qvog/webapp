@@ -1,29 +1,60 @@
+import { apiFetch } from './http'
+
 export const tradeApi = {
-  async getMarkets(game = 'Dota 2') {
-    const res = await fetch(`/api/markets?game=${game}`)
-    return res.json()
+  getMarkets(category = 'most_traded', subcategory = 'all') {
+    const q = new URLSearchParams({ category, subcategory })
+    return apiFetch(`/api/markets?${q}`)
   },
-  
-  async getPositions() {
-    const res = await fetch('/api/positions')
-    return res.json()
+
+  searchMarkets(query) {
+    const q = new URLSearchParams({ q: query })
+    return apiFetch(`/api/markets/search?${q}`)
   },
-  
-  async placeOrder(payload) {
-    const res = await fetch('/api/trade', {
+
+  getPositions() {
+    return apiFetch('/api/positions')
+  },
+
+  placeOrder(payload) {
+    return apiFetch('/api/order', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
     })
-    return res.json()
   },
-  
-  async panicSell(orderId) {
-    const res = await fetch('/api/panic_sell', {
+
+  panicSell(orderId) {
+    return apiFetch(`/api/panic_sell/${encodeURIComponent(orderId)}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ order_id: orderId })
     })
-    return res.json()
-  }
+  },
+
+  /**
+   * Manual resolve for stuck/ended positions.
+   * @param {string} orderId
+   * @param {number} exitPrice 0.0–1.0 (1.0 = win, 0.0 = loss, entry = drop/0 PnL)
+   */
+  resolvePosition(orderId, exitPrice) {
+    return apiFetch(`/api/positions/${encodeURIComponent(orderId)}/resolve`, {
+      method: 'POST',
+      body: JSON.stringify({ exit_price: Number(exitPrice) }),
+    })
+  },
+
+  /** F10 flatten: market-sell all OPEN positions for a token */
+  flatten(tokenId) {
+    return apiFetch(`/api/flatten/${encodeURIComponent(tokenId)}`, {
+      method: 'POST',
+    })
+  },
+
+  /** Read-only PnL / strategy analytics (period: today|24h|7d|30d|90d|1y|all) */
+  getStatsSummary(period = 'all') {
+    const q = new URLSearchParams({ period })
+    return apiFetch(`/api/stats/summary?${q}`)
+  },
+
+  getStatsHistory(period = 'all') {
+    const q = new URLSearchParams({ period })
+    return apiFetch(`/api/stats/history?${q}`)
+  },
 }

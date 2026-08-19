@@ -152,7 +152,10 @@ trades.db
 *.trades.db
 
 trades.db-shm
+*.trades.db-shm
+
 trades.db-wal
+*.trades.db-wal
 
 # Logs
 logs
