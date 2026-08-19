@@ -15,7 +15,7 @@
         />
 
 
-        <div class="flex-1 relative flex flex-col min-w-[350px]">
+        <div class="flex-1 relative flex flex-col min-w-[520px]">
           <div
             v-if="isConnecting"
             class="absolute inset-0 z-50 flex items-center justify-center backdrop-blur-sm bg-[#050505]/80 rounded-2xl border border-zinc-800"
@@ -35,7 +35,7 @@
             >
               {{ activeSubMarket.question }}
             </h2>
-            <div class="flex items-center gap-2">
+            <div class="flex items-center gap-2 flex-wrap justify-end">
               <div
                 :class="[
                   'px-2.5 py-1 rounded-md text-[11px] font-mono font-bold border transition-colors whitespace-nowrap',
@@ -45,12 +45,16 @@
                 {{ strategyLabel }}
               </div>
               <div
-                :class="[
-                  'px-2.5 py-1 rounded-md text-[11px] font-mono font-bold border transition-colors whitespace-nowrap',
-                  spreadBadgeClass,
-                ]"
+                class="px-2.5 py-1 rounded-md text-[11px] font-mono font-bold border whitespace-nowrap bg-[#00e5ff]/10 text-[#00e5ff] border-[#00e5ff]/30"
+                :title="(activeSubMarket.out1 || 'YES') + ' spread'"
               >
-                SPREAD: {{ activeSpreadCents }}¢
+                {{ activeSubMarket.out1 || 'YES' }}: {{ spreadYesCents }}¢
+              </div>
+              <div
+                class="px-2.5 py-1 rounded-md text-[11px] font-mono font-bold border whitespace-nowrap bg-indigo-500/10 text-indigo-300 border-indigo-500/30"
+                :title="(activeSubMarket.out2 || 'NO') + ' spread'"
+              >
+                {{ activeSubMarket.out2 || 'NO' }}: {{ spreadNoCents }}¢
               </div>
             </div>
           </div>
@@ -59,15 +63,18 @@
             ref="orderBookRef"
             v-if="activeSubMarket"
             :isDark="true"
-            v-model:activeTeam="activeTeam"
             :team1Name="activeSubMarket.out1"
             :team2Name="activeSubMarket.out2"
             :ladderYes="ladderYes"
             :ladderNo="ladderNo"
-            :currentTokenId="activeTeam === 1 ? activeSubMarket.token_id_yes : activeSubMarket.token_id_no"
-            :imbalancePercent="activeImbalance"
-            :maxBidSize="activeMaxBidSize"
-            :maxAskSize="activeMaxAskSize"
+            :tokenIdYes="activeSubMarket.token_id_yes"
+            :tokenIdNo="activeSubMarket.token_id_no"
+            :imbalanceYes="imbalanceYes"
+            :imbalanceNo="imbalanceNo"
+            :maxBidSizeYes="maxBidSizeYes"
+            :maxAskSizeYes="maxAskSizeYes"
+            :maxBidSizeNo="maxBidSizeNo"
+            :maxAskSizeNo="maxAskSizeNo"
             @placeOrder="handlePlaceOrder"
           />
         </div>
@@ -146,27 +153,8 @@ const strategyBadgeClass = computed(() => {
   return 'bg-[#00e5ff]/10 text-[#00e5ff] border-[#00e5ff]/30'
 })
 
-const activeSpreadCents = computed(() => {
-  const sp = activeTeam.value === 1 ? spreadYes.value : spreadNo.value
-  return Math.round(sp * 100)
-})
-
-const activeImbalance = computed(() =>
-  activeTeam.value === 1 ? imbalanceYes.value : imbalanceNo.value
-)
-const activeMaxBidSize = computed(() =>
-  activeTeam.value === 1 ? maxBidSizeYes.value : maxBidSizeNo.value
-)
-const activeMaxAskSize = computed(() =>
-  activeTeam.value === 1 ? maxAskSizeYes.value : maxAskSizeNo.value
-)
-
-const spreadBadgeClass = computed(() => {
-  const cents = activeSpreadCents.value
-  if (cents <= 2) return 'bg-[#00e5ff]/10 text-[#00e5ff] border-[#00e5ff]/30'
-  if (cents <= 5) return 'bg-yellow-500/10 text-yellow-400 border-yellow-500/30'
-  return 'bg-indigo-500/10 text-indigo-400 border-indigo-500/30'
-})
+const spreadYesCents = computed(() => Math.round(spreadYes.value * 100))
+const spreadNoCents = computed(() => Math.round(spreadNo.value * 100))
 
 const livePositions = computed(() =>
   marketStore.openPositions.map((pos) => {
@@ -374,9 +362,12 @@ watch(
   { immediate: true }
 )
 
-const handlePlaceOrder = async (side, priceCents) => {
+const handlePlaceOrder = async (side, priceCents, team = null) => {
   if (side === 'SELL') return
   if (!activeSubMarket.value) return
+
+  // Dual book: clicking a column selects that outcome for this order / flatten
+  if (team === 1 || team === 2) activeTeam.value = team
 
   const price = Math.round(Number(priceCents)) / 100.0
   if (!price || price < 0.01 || price > 0.99) {

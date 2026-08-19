@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import traceback
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
@@ -284,12 +285,13 @@ async def place_order(
         logger.exception("place_order failed")
         order_audit.error(
             "ERROR place_order exception | strategy=%s token_id=%s size=%s "
-            "price=%s error=%s",
+            "price=%s error=%s\n%s",
             strategy,
             req.token_id,
             safe_size,
             safe_price,
             exc,
+            traceback.format_exc(),
         )
         return {"success": False, "error": str(exc)}
 

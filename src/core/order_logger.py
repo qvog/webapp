@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import traceback
 from pathlib import Path
 
 # Project root: src/core/order_logger.py → ../../
@@ -35,6 +36,15 @@ def get_order_audit_logger() -> logging.Logger:
 
     _order_audit = logger
     return logger
+
+
+def log_order_exception(message: str, *args) -> None:
+    """Log an order failure with the full Python stack trace for deep debugging."""
+    get_order_audit_logger().error(
+        "%s\n%s",
+        message % args if args else message,
+        traceback.format_exc(),
+    )
 
 
 # Convenience module-level alias

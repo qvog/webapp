@@ -83,18 +83,22 @@
           </div>
         </div>
 
-        <!-- Stats -->
-        <div class="text-[10px] flex flex-col gap-1.5 text-zinc-500 font-mono">
-          <div class="flex justify-between px-2.5 py-2 rounded-lg bg-[#0a0a0a]">
-            <span>IN: <b class="text-white">{{ Math.round(pos.entry_price * 100) }}¢</b></span>
-            <span>SZ: <b class="text-white">{{ Number(pos.size).toFixed(1) }}</b></span>
+        <!-- Stats: shared 2-col grid so IN/SZ aligns with TP/SL -->
+        <div class="text-[10px] flex flex-col gap-1 text-zinc-500 font-mono">
+          <div class="grid grid-cols-2 gap-x-3 px-2.5 py-2 rounded-lg bg-[#0a0a0a]">
+            <span class="text-left">
+              IN: <b class="text-white">{{ Math.round(pos.entry_price * 100) }}¢</b>
+            </span>
+            <span class="text-right">
+              SZ: <b class="text-white">{{ Number(pos.size).toFixed(1) }}</b>
+            </span>
           </div>
-          <div class="flex justify-between px-1.5">
-            <span class="text-[#00e5ff]/70">
+          <div class="grid grid-cols-2 gap-x-3 px-2.5 py-1">
+            <span class="text-left text-[#00e5ff]/70">
               TP:
               <b class="text-[#00e5ff]">{{ pos.tp_price ? Math.round(pos.tp_price * 100) + '¢' : '--' }}</b>
             </span>
-            <span class="text-indigo-400/70">
+            <span class="text-right text-indigo-400/70">
               SL:
               <b class="text-indigo-400">
                 {{ pos.sl_trigger_price ? Math.round(pos.sl_trigger_price * 100) + '¢' : '--' }}
