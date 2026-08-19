@@ -14,6 +14,7 @@
           @select-sub="openSubMarket"
         />
 
+
         <div class="flex-1 relative flex flex-col min-w-[350px]">
           <div
             v-if="isConnecting"
@@ -80,7 +81,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted, nextTick, computed } from 'vue'
+import { ref, onMounted, onUnmounted, nextTick, computed, watch } from 'vue'
 import { useToast } from 'vue-toastification'
 
 import OrderBook from './Terminal/OrderBook.vue'
@@ -117,7 +118,8 @@ const {
   disconnect,
 } = useOrderBook()
 
-const currentEvent = ref(null)
+/** Open terminal event — sourced from Pinia so logo / global sidebar can navigate. */
+const currentEvent = computed(() => marketStore.activeEvent)
 const activeSubMarket = ref(null)
 const activeTeam = ref(1)
 const orderBookRef = ref(null)
@@ -276,7 +278,13 @@ const handleKeydown = (e) => {
   }
 
   // Space → scroll to spread (existing)
-  if (e.code === 'Space' && currentEvent.value && e.target.tagName !== 'INPUT' && e.target.tagName !== 'SELECT' && e.target.tagName !== 'TEXTAREA') {
+  if (
+    e.code === 'Space' &&
+    currentEvent.value &&
+    e.target.tagName !== 'INPUT' &&
+    e.target.tagName !== 'SELECT' &&
+    e.target.tagName !== 'TEXTAREA'
+  ) {
     e.preventDefault()
     orderBookRef.value?.scrollToSpread()
     return
@@ -309,21 +317,62 @@ const handleKeydown = (e) => {
 
 const closeTerminal = () => {
   disconnect()
-  currentEvent.value = null
   activeSubMarket.value = null
+  marketStore.closeActiveMarket()
 }
 
 const openEvent = (match) => {
-  currentEvent.value = match
-  if (match.sub_markets?.length) openSubMarket(match.sub_markets[0])
+  if (!match) return
+  marketStore.setActiveMarket(match)
 }
 
-const openSubMarket = (sub) => {
+/**
+ * Pick sub-market (and YES/NO side) for a focus token, else first sub.
+ * @returns {{ sub: object|null, team: 1|2 }}
+ */
+function resolveFocusForEvent(match, focusTokenId) {
+  const subs = match?.sub_markets || []
+  if (!subs.length) return { sub: null, team: 1 }
+  if (focusTokenId) {
+    const tid = String(focusTokenId)
+    for (const sub of subs) {
+      const yes = sub.token_id_yes != null ? String(sub.token_id_yes) : ''
+      const no = sub.token_id_no != null ? String(sub.token_id_no) : ''
+      if (yes === tid) return { sub, team: 1 }
+      if (no === tid) return { sub, team: 2 }
+    }
+  }
+  return { sub: subs[0], team: 1 }
+}
+
+const openSubMarket = (sub, team = null) => {
+  if (!sub) {
+    activeSubMarket.value = null
+    disconnect()
+    return
+  }
   activeSubMarket.value = sub
+  if (team === 1 || team === 2) activeTeam.value = team
   connectToMarket(sub, () => {
     nextTick(() => orderBookRef.value?.scrollToSpread())
   })
 }
+
+/** Sync local orderbook whenever Pinia opens/refocuses a market. */
+watch(
+  () => [marketStore.activeEvent, marketStore.focusRequestId],
+  ([match]) => {
+    if (!match) {
+      disconnect()
+      activeSubMarket.value = null
+      return
+    }
+    const focusToken = marketStore.consumePendingFocusTokenId()
+    const { sub, team } = resolveFocusForEvent(match, focusToken)
+    openSubMarket(sub, team)
+  },
+  { immediate: true }
+)
 
 const handlePlaceOrder = async (side, priceCents) => {
   if (side === 'SELL') return
@@ -421,6 +470,7 @@ onMounted(() => {
   // Capture phase so F-keys win over browser chrome where possible
   window.addEventListener('keydown', handleKeydown, true)
   marketStore.loadMatches()
+  // Positions are also polled by GlobalPositionsSidebar; keep a local sync for live PnL
   marketStore.loadPositions()
   positionsTimer = setInterval(() => marketStore.loadPositions(), 3000)
 })

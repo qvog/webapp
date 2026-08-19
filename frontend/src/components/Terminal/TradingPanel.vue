@@ -108,13 +108,18 @@
           :key="sub.condition_id"
           @click="$emit('select-sub', sub)"
           :class="[
-            'w-full p-3 rounded-xl text-left text-[11px] font-mono leading-relaxed transition-all border',
+            'relative w-full p-3 rounded-xl text-left text-[11px] font-mono leading-relaxed transition-all border pr-6',
             activeSub?.condition_id === sub.condition_id
               ? 'border-[#00e5ff] bg-[#00e5ff]/10 text-white shadow-[0_0_15px_rgba(0,229,255,0.1)]'
               : 'border-zinc-800/50 bg-[#050505] text-zinc-400 hover:bg-zinc-800',
           ]"
         >
-          {{ sub.question }}
+          <div
+            v-if="marketStore.subHasActiveOrder(sub)"
+            class="w-2 h-2 bg-yellow-400 rounded-full shadow-[0_0_5px_rgba(250,204,21,0.8)] absolute top-1 right-1"
+            title="Active order on this sub-market"
+          />
+          <span class="line-clamp-2">{{ sub.question }}</span>
         </button>
       </div>
     </div>

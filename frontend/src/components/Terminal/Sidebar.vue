@@ -6,21 +6,26 @@
     ]"
   >
     <div class="flex flex-col gap-1 py-4">
-      <div class="flex items-center px-4 mb-6 cursor-pointer" @click="goHome">
+      <button
+        type="button"
+        class="flex items-center px-4 mb-6 cursor-pointer group rounded-lg -mx-1 py-1 hover:bg-zinc-900/50 transition-colors focus:outline-none"
+        title="Home — close terminal"
+        @click="goHome"
+      >
         <div
-          class="w-8 h-8 rounded shrink-0 flex items-center justify-center font-black text-black bg-[#00e5ff] tracking-tighter shadow-[0_0_15px_rgba(0,229,255,0.3)]"
+          class="w-8 h-8 rounded shrink-0 flex items-center justify-center font-black text-black bg-[#00e5ff] tracking-tighter shadow-[0_0_15px_rgba(0,229,255,0.3)] transition-transform group-hover:scale-105 group-hover:shadow-[0_0_20px_rgba(0,229,255,0.55)]"
         >
           qS
         </div>
         <span
           :class="[
-            'font-black text-lg tracking-widest text-white transition-opacity duration-300',
-            marketStore.isSidebarExpanded ? 'opacity-100 ml-4' : 'opacity-0 ml-0',
+            'font-black text-lg tracking-widest text-white transition-all duration-300 group-hover:text-[#00e5ff]',
+            marketStore.isSidebarExpanded ? 'opacity-100 ml-4' : 'opacity-0 ml-0 w-0 overflow-hidden',
           ]"
         >
           QSCALP
         </span>
-      </div>
+      </button>
 
       <NavItem
         v-for="item in navItems"
@@ -140,8 +145,10 @@ function selectCategory(id) {
   marketStore.setCategory(id)
 }
 
+/** Clickable logo → close open terminal and return to Most Traded dashboard. */
 function goHome() {
   emit('change-tab', 'terminal')
+  marketStore.goHome()
   emit('home')
 }
 

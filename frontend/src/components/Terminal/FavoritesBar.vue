@@ -21,6 +21,12 @@
         v-if="activeEventId === fav.event_id"
         class="absolute bottom-0 left-0 w-full h-[2px] bg-[#00e5ff] shadow-[0_0_8px_rgba(0,229,255,0.8)]"
       />
+      <!-- Active order indicator -->
+      <div
+        v-if="marketStore.eventHasActiveOrder(fav)"
+        class="w-2 h-2 bg-yellow-400 rounded-full shadow-[0_0_5px_rgba(250,204,21,0.8)] absolute top-1 right-1 z-10"
+        title="Active order on this market"
+      />
       <img
         v-if="fav.image"
         :src="fav.image"

@@ -1,6 +1,6 @@
 <template>
   <div
-    class="w-64 border border-zinc-800/60 rounded-2xl bg-[#0a0a0a]/80 backdrop-blur-sm p-4 flex flex-col shrink-0 shadow-lg"
+    class="w-72 border border-zinc-800/60 rounded-2xl bg-[#0a0a0a]/80 backdrop-blur-sm p-4 flex flex-col shrink-0 shadow-lg"
   >
     <div class="flex justify-between items-center mb-4">
       <h3 class="font-bold text-zinc-500 text-[10px] tracking-widest uppercase">Live Positions</h3>
@@ -23,34 +23,51 @@
       <div
         v-for="pos in positions"
         :key="pos.order_id"
-        class="border border-zinc-800 rounded-xl bg-[#050505] p-3 flex flex-col gap-2 transition-colors hover:border-zinc-600"
+        class="border border-zinc-800 rounded-2xl bg-[#050505] p-4 flex flex-col gap-3 transition-colors hover:border-zinc-600 min-h-[168px]"
       >
-        <div class="flex justify-between items-center gap-2">
-          <div class="flex items-center gap-1.5 min-w-0">
-            <!-- Same marker as OrderBook: ● + last 4 of order_id -->
-            <span
-              class="flex items-center gap-0.5 shrink-0 text-yellow-400 font-bold text-[10px] font-mono leading-none tracking-tight"
-              :title="pos.order_id"
+        <!-- Market / event title -->
+        <div class="flex items-start gap-2.5 min-w-0">
+          <img
+            v-if="marketImage(pos)"
+            :src="marketImage(pos)"
+            alt=""
+            class="w-7 h-7 rounded-full object-cover border border-zinc-800 shrink-0 bg-zinc-900 mt-0.5"
+          />
+          <div
+            v-else
+            class="w-7 h-7 rounded-full bg-zinc-900 border border-zinc-800 shrink-0 mt-0.5"
+          />
+          <div class="min-w-0 flex-1">
+            <h4
+              class="text-[12px] font-bold text-white leading-snug line-clamp-2 tracking-wide"
+              :title="marketTitle(pos)"
             >
-              <span class="inline-block w-1.5 h-1.5 rounded-full bg-yellow-400 shadow-[0_0_6px_#eab308]" />
-              {{ shortOrderId(pos.order_id) }}
-            </span>
-            <span
-              class="font-bold text-[11px] truncate text-gray-200 uppercase tracking-wide"
-              :title="marketStore.getTeamNameFromToken(pos.token_id)"
-            >
-              {{ marketStore.getTeamNameFromToken(pos.token_id) }}
-            </span>
-            <!-- Strategy badge next to token/team name -->
-            <span
-              class="shrink-0 text-[8px] px-1.5 py-0.5 rounded font-bold font-mono uppercase tracking-wider bg-zinc-800/80 text-zinc-400 border border-zinc-700/60"
-              :title="'Strategy: ' + formatStrategy(pos.strategy)"
-            >
-              {{ formatStrategy(pos.strategy) }}
-            </span>
+              {{ marketTitle(pos) }}
+            </h4>
+            <div class="flex items-center gap-1.5 mt-1 min-w-0">
+              <span
+                class="flex items-center gap-0.5 shrink-0 text-yellow-400 font-bold text-[10px] font-mono leading-none tracking-tight"
+                :title="pos.order_id"
+              >
+                <span class="inline-block w-1.5 h-1.5 rounded-full bg-yellow-400 shadow-[0_0_6px_#eab308]" />
+                {{ shortOrderId(pos.order_id) }}
+              </span>
+              <span
+                class="text-[10px] font-bold text-zinc-400 uppercase truncate"
+                :title="marketStore.getTeamNameFromToken(pos.token_id)"
+              >
+                {{ marketStore.getTeamNameFromToken(pos.token_id) }}
+              </span>
+              <span
+                class="shrink-0 text-[8px] px-1.5 py-0.5 rounded font-bold font-mono uppercase tracking-wider bg-zinc-800/80 text-zinc-400 border border-zinc-700/60"
+                :title="'Strategy: ' + formatStrategy(pos.strategy)"
+              >
+                {{ formatStrategy(pos.strategy) }}
+              </span>
+            </div>
           </div>
 
-          <div class="flex items-center shrink-0">
+          <div class="flex items-center shrink-0 pl-1">
             <span
               v-if="pos.status === 'PENDING'"
               class="text-[9px] px-1.5 py-0.5 rounded font-bold bg-yellow-500/10 text-yellow-500 border border-yellow-500/30 animate-pulse uppercase tracking-widest"
@@ -59,19 +76,20 @@
             </span>
             <span
               v-else
-              :class="['font-mono font-bold text-xs', pos.liveDiff >= 0 ? 'text-[#00e5ff]' : 'text-indigo-400']"
+              :class="['font-mono font-bold text-sm', pos.liveDiff >= 0 ? 'text-[#00e5ff]' : 'text-indigo-400']"
             >
               {{ pos.liveDiff > 0 ? '+' : '' }}{{ pos.liveDiff }}¢
             </span>
           </div>
         </div>
 
+        <!-- Stats -->
         <div class="text-[10px] flex flex-col gap-1.5 text-zinc-500 font-mono">
-          <div class="flex justify-between px-2 py-1.5 rounded-lg bg-[#0a0a0a]">
+          <div class="flex justify-between px-2.5 py-2 rounded-lg bg-[#0a0a0a]">
             <span>IN: <b class="text-white">{{ Math.round(pos.entry_price * 100) }}¢</b></span>
-            <span>SZ: <b class="text-white">{{ pos.size.toFixed(1) }}</b></span>
+            <span>SZ: <b class="text-white">{{ Number(pos.size).toFixed(1) }}</b></span>
           </div>
-          <div class="flex justify-between px-1.5 mt-0.5">
+          <div class="flex justify-between px-1.5">
             <span class="text-[#00e5ff]/70">
               TP:
               <b class="text-[#00e5ff]">{{ pos.tp_price ? Math.round(pos.tp_price * 100) + '¢' : '--' }}</b>
@@ -87,7 +105,7 @@
 
         <button
           @click="$emit('panic', pos.order_id)"
-          class="w-full mt-1 bg-indigo-500/10 hover:bg-[#312E81] text-indigo-400 hover:text-white text-[10px] py-1.5 rounded-lg transition-all font-bold uppercase tracking-widest border border-indigo-500/30"
+          class="w-full bg-indigo-500/10 hover:bg-[#312E81] text-indigo-400 hover:text-white text-[10px] py-2 rounded-lg transition-all font-bold uppercase tracking-widest border border-indigo-500/30"
         >
           {{ pos.status === 'PENDING' ? 'CANCEL' : 'MARKET DUMP' }}
         </button>
@@ -98,7 +116,7 @@
             type="button"
             :disabled="resolvingId === pos.order_id"
             @click="resolvePosition(pos, 1.0)"
-            class="text-[8px] py-1 rounded-md font-bold uppercase tracking-wider border transition-all disabled:opacity-40
+            class="text-[8px] py-1.5 rounded-md font-bold uppercase tracking-wider border transition-all disabled:opacity-40
               bg-emerald-500/10 hover:bg-emerald-500/25 text-emerald-400 border-emerald-500/30"
             title="Resolve as win @ 100¢"
           >
@@ -108,7 +126,7 @@
             type="button"
             :disabled="resolvingId === pos.order_id"
             @click="resolvePosition(pos, 0.0)"
-            class="text-[8px] py-1 rounded-md font-bold uppercase tracking-wider border transition-all disabled:opacity-40
+            class="text-[8px] py-1.5 rounded-md font-bold uppercase tracking-wider border transition-all disabled:opacity-40
               bg-red-500/10 hover:bg-red-500/25 text-red-400 border-red-500/30"
             title="Resolve as loss @ 0¢"
           >
@@ -118,7 +136,7 @@
             type="button"
             :disabled="resolvingId === pos.order_id"
             @click="resolvePosition(pos, pos.entry_price)"
-            class="text-[8px] py-1 rounded-md font-bold uppercase tracking-wider border transition-all disabled:opacity-40
+            class="text-[8px] py-1.5 rounded-md font-bold uppercase tracking-wider border transition-all disabled:opacity-40
               bg-zinc-800/60 hover:bg-zinc-700 text-zinc-400 border-zinc-700"
             title="Drop / hide — resolve @ entry (0 PnL)"
           >
@@ -154,6 +172,15 @@ function shortOrderId(orderId) {
 function formatStrategy(strategy) {
   if (!strategy) return 'CUSTOM'
   return String(strategy).toUpperCase()
+}
+
+function marketTitle(pos) {
+  const meta = marketStore.resolveMarketFromToken(pos?.token_id)
+  return meta.title || meta.question || marketStore.getTeamNameFromToken(pos?.token_id) || 'Unknown market'
+}
+
+function marketImage(pos) {
+  return marketStore.getImageFromToken(pos?.token_id)
 }
 
 /**
