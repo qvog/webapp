@@ -47,13 +47,22 @@
         v-for="row in ladder"
         :key="row.price"
         :data-price="row.price"
-        class="price-row grid grid-cols-3 border-b hover:bg-[#00e5ff]/10 transition-colors group cursor-crosshair h-6 relative"
+        class="price-row grid grid-cols-3 border-b hover:bg-[#00e5ff]/10 group cursor-crosshair h-6 relative"
         :class="rowClass(row)"
         :style="spreadRowStyle(row)"
       >
+        <!-- Shock flash overlay (keyed so animation restarts on each impulse) -->
+        <div
+          v-if="flashes[row.price]"
+          :key="flashes[row.price].gen"
+          class="pointer-events-none absolute inset-0 z-[5]"
+          :class="'shock-flash-' + flashes[row.price].kind"
+        />
+
+        <!-- Bid -->
         <div
           @click="$emit('placeOrder', 'BUY', row.price)"
-          class="relative flex items-center justify-end px-1.5 text-green-400 font-mono text-[11px] border-r"
+          class="relative flex items-center justify-end px-1.5 text-green-400 font-mono text-[11px] border-r z-10"
           :class="isDark ? 'border-zinc-800/30' : 'border-gray-200'"
           :style="bidHeatStyle(row.bidSize)"
         >
@@ -66,25 +75,35 @@
           </span>
         </div>
 
+        <!-- Price + personal order anchor -->
         <div
           :class="[
-            'flex items-center justify-center font-bold font-mono text-xs relative gap-0.5',
+            'flex items-center justify-center font-bold font-mono text-xs relative gap-0.5 z-10',
             getPriceColorClass(row),
           ]"
         >
           <span
-            v-if="positionAtPrice(row.price)"
-            class="absolute left-0 flex items-center gap-0.5 text-yellow-400 font-bold text-[8px] leading-none tracking-tight whitespace-nowrap z-10"
-            :title="'Position ' + positionAtPrice(row.price)"
+            v-if="orderAtPrice(row.price)"
+            class="absolute inset-y-0 left-0 w-0.5 bg-yellow-400 shadow-[0_0_6px_#eab308] z-20"
+            aria-hidden="true"
+          />
+          <span
+            v-if="orderAtPrice(row.price)"
+            class="absolute left-1 flex items-center gap-0.5 text-yellow-400 font-bold text-[8px] leading-none tracking-tight whitespace-nowrap z-10"
+            :title="orderTooltip(row.price)"
           >
-            <span class="inline-block w-1 h-1 rounded-full bg-yellow-400 shadow-[0_0_6px_#eab308]" />
-            {{ positionAtPrice(row.price) }}
+            <span class="inline-block w-1.5 h-1.5 rounded-full bg-yellow-400 shadow-[0_0_6px_#eab308]" />
+            {{ orderAtPrice(row.price).shortId }}
+            <span v-if="orderAtPrice(row.price).size" class="text-yellow-500/80">
+              ×{{ formatOrderSize(orderAtPrice(row.price).size) }}
+            </span>
           </span>
           {{ row.price }}
         </div>
 
+        <!-- Ask -->
         <div
-          class="relative flex items-center justify-start px-1.5 text-red-400 font-mono text-[11px] border-l"
+          class="relative flex items-center justify-start px-1.5 text-red-400 font-mono text-[11px] border-l z-10"
           :class="isDark ? 'border-zinc-800/30' : 'border-gray-200'"
           :style="askHeatStyle(row.askSize)"
         >
@@ -104,6 +123,7 @@
 <script setup>
 import { computed, ref } from 'vue'
 import { useMarketStore } from '../../store/marketStore'
+import { useLiquidityRadar } from '../../composables/useLiquidityRadar'
 
 const props = defineProps({
   isDark: Boolean,
@@ -120,6 +140,8 @@ defineEmits(['placeOrder'])
 
 const containerRef = ref(null)
 const marketStore = useMarketStore()
+
+const { flashes } = useLiquidityRadar(() => props.ladder)
 
 const imbalanceClamped = computed(() => {
   const v = Number(props.imbalancePercent)
@@ -177,24 +199,52 @@ const effectiveMaxAsk = computed(() =>
   props.maxAskSize > 0 ? props.maxAskSize : localMax.value.maxAsk
 )
 
-const positionsByPrice = computed(() => {
+/**
+ * Active/pending user orders on this token, keyed by entry price (cents).
+ * Aggregates size when multiple orders share a level.
+ */
+const ordersByPrice = computed(() => {
   const map = new Map()
   const tid = props.tokenId != null ? String(props.tokenId) : ''
   if (!tid) return map
   for (const p of marketStore.openPositions) {
     if (String(p.token_id) !== tid) continue
-    if (!['PENDING', 'OPEN'].includes(p.status)) continue
+    if (!['PENDING', 'OPEN'].includes(String(p.status || '').toUpperCase())) continue
     if (p.entry_price == null) continue
     const cents = Math.round(Number(p.entry_price) * 100)
+    if (cents < 1 || cents > 99) continue
     const shortId = String(p.order_id || '').slice(-4)
     if (!shortId) continue
-    if (!map.has(cents)) map.set(cents, shortId)
+    const size = Number(p.size) || 0
+    const existing = map.get(cents)
+    if (!existing) {
+      map.set(cents, { shortId, size, status: p.status, count: 1 })
+    } else {
+      existing.size += size
+      existing.count += 1
+      // Keep first shortId as the visible anchor
+    }
   }
   return map
 })
 
-function positionAtPrice(priceCents) {
-  return positionsByPrice.value.get(priceCents) || null
+function orderAtPrice(priceCents) {
+  return ordersByPrice.value.get(priceCents) || null
+}
+
+function orderTooltip(priceCents) {
+  const o = orderAtPrice(priceCents)
+  if (!o) return ''
+  const parts = [`Your order …${o.shortId}`, o.status]
+  if (o.size) parts.push(`size ${o.size.toFixed(1)}`)
+  if (o.count > 1) parts.push(`${o.count} orders`)
+  return parts.join(' · ')
+}
+
+function formatOrderSize(size) {
+  if (!size || size <= 0) return ''
+  if (size >= 100) return size.toFixed(0)
+  return size.toFixed(1)
 }
 
 function bidHeatStyle(size) {
@@ -215,8 +265,12 @@ function askHeatStyle(size) {
 
 function rowClass(row) {
   const classes = [props.isDark ? 'border-zinc-800/50' : 'border-gray-200']
-  if (positionAtPrice(row.price)) {
-    classes.push(props.isDark ? 'bg-yellow-900/10' : 'bg-yellow-50')
+  if (orderAtPrice(row.price)) {
+    classes.push(
+      props.isDark
+        ? 'bg-yellow-900/15 ring-1 ring-inset ring-yellow-400/35'
+        : 'bg-yellow-50 ring-1 ring-inset ring-yellow-400/50'
+    )
   }
   return classes
 }
@@ -229,6 +283,7 @@ function spreadRowStyle(row) {
 }
 
 function getPriceColorClass(row) {
+  if (orderAtPrice(row.price)) return 'text-yellow-300'
   if (row.price === bestBidCents.value) return 'text-green-400'
   if (row.price === bestAskCents.value) return 'text-red-400'
   return props.isDark ? 'text-gray-300' : 'text-gray-700'
@@ -254,3 +309,47 @@ const scrollToSpread = () => {
 
 defineExpose({ scrollToSpread })
 </script>
+
+<style scoped>
+/* Shock / jump detector — green = bid pull, red = ask pull, amber = price jump */
+.shock-flash-bid {
+  animation: shock-bid-fade 480ms ease-out forwards;
+}
+.shock-flash-ask {
+  animation: shock-ask-fade 480ms ease-out forwards;
+}
+.shock-flash-jump {
+  animation: shock-jump-fade 480ms ease-out forwards;
+}
+
+@keyframes shock-bid-fade {
+  0% {
+    background-color: rgba(34, 197, 94, 0.55);
+    box-shadow: inset 0 0 0 1px rgba(34, 197, 94, 0.85);
+  }
+  100% {
+    background-color: transparent;
+    box-shadow: none;
+  }
+}
+@keyframes shock-ask-fade {
+  0% {
+    background-color: rgba(239, 68, 68, 0.55);
+    box-shadow: inset 0 0 0 1px rgba(239, 68, 68, 0.85);
+  }
+  100% {
+    background-color: transparent;
+    box-shadow: none;
+  }
+}
+@keyframes shock-jump-fade {
+  0% {
+    background-color: rgba(250, 204, 21, 0.42);
+    box-shadow: inset 0 0 0 1px rgba(250, 204, 21, 0.75);
+  }
+  100% {
+    background-color: transparent;
+    box-shadow: none;
+  }
+}
+</style>
