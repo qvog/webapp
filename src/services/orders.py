@@ -28,10 +28,10 @@ def validate_limit_price(price: float) -> float:
     try:
         p = float(price)
     except (TypeError, ValueError) as exc:
-        raise ValueError("Цена ордера должна быть числом") from exc
+        raise ValueError("Order price must be a number") from exc
     if p < MIN_LIMIT_PRICE or p > MAX_LIMIT_PRICE:
         raise ValueError(
-            f"Цена ордера {p} вне допустимого диапазона "
+            f"Order price {p} is outside the allowed range "
             f"[{MIN_LIMIT_PRICE}, {MAX_LIMIT_PRICE}]"
         )
     return p

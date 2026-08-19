@@ -158,13 +158,13 @@ async def place_order(
     strategy = (req.strategy or "custom").lower()
 
     if req.bankroll < 5.00:
-        return {"success": False, "error": f"Банкролл ({req.bankroll}$) меньше $5."}
+        return {"success": False, "error": f"Bankroll (${req.bankroll}) is below $5."}
 
     target_invest = req.bankroll * (req.risk_percent / 100)
     actual_invest = min(req.bankroll, max(5.00, target_invest))
 
     if actual_invest <= 0:
-        return {"success": False, "error": "Размер позиции должен быть > 0."}
+        return {"success": False, "error": "Position size must be > 0."}
 
     safe_size = round(actual_invest / safe_price, 2)
 
@@ -319,7 +319,7 @@ async def flatten_token(token_id: str, db: Session = Depends(get_db)):
         if not open_positions:
             return {
                 "success": False,
-                "error": "Нет OPEN позиций по этому токену",
+                "error": "No OPEN positions for this token",
             }
 
         total_size = round(sum(float(p.size or 0) for p in open_positions), 2)
@@ -355,7 +355,7 @@ async def flatten_token(token_id: str, db: Session = Depends(get_db)):
             order_audit.info(
                 "FLATTEN done (zero size) | token_id=%s", token_id
             )
-            return {"success": True, "message": "Позиции закрыты (size=0)."}
+            return {"success": True, "message": "Positions closed (size=0)."}
 
         try:
             options = await get_neg_risk_options(token_id)
@@ -377,7 +377,7 @@ async def flatten_token(token_id: str, db: Session = Depends(get_db)):
                 )
                 return {
                     "success": True,
-                    "message": f"Flatten: продано {total_size} @ market",
+                    "message": f"Flatten: sold {total_size} @ market",
                     "size": total_size,
                 }
 
@@ -386,7 +386,7 @@ async def flatten_token(token_id: str, db: Session = Depends(get_db)):
                     pos.status = "RESOLVED"
                     pos.exit_price = 1.0
                 db.commit()
-                return {"success": True, "message": "Очищено (рынок завершен)."}
+                return {"success": True, "message": "Cleared (market resolved)."}
 
             err = str(resp) if resp else "empty response"
             order_audit.error(
@@ -395,7 +395,7 @@ async def flatten_token(token_id: str, db: Session = Depends(get_db)):
                 total_size,
                 err,
             )
-            return {"success": False, "error": f"Ошибка market sell: {err}"}
+            return {"success": False, "error": f"Market sell error: {err}"}
 
         except Exception as exc:
             if is_resolved_error(str(exc)):
@@ -403,21 +403,21 @@ async def flatten_token(token_id: str, db: Session = Depends(get_db)):
                     pos.status = "RESOLVED"
                     pos.exit_price = 1.0
                 db.commit()
-                return {"success": True, "message": "Очищено (рынок завершен)."}
+                return {"success": True, "message": "Cleared (market resolved)."}
             order_audit.error(
                 "FLATTEN exception | token_id=%s size=%s error=%s",
                 token_id,
                 total_size,
                 exc,
             )
-            return {"success": False, "error": f"Ошибка Polymarket: {exc}"}
+            return {"success": False, "error": f"Polymarket error: {exc}"}
 
     except Exception as exc:
         logger.exception("flatten failed")
         order_audit.error(
             "FLATTEN internal error | token_id=%s error=%s", token_id, exc
         )
-        return {"success": False, "error": f"Внутренняя ошибка сервера: {exc}"}
+        return {"success": False, "error": f"Internal server error: {exc}"}
 
 
 @router.post("/panic_sell/{order_id}")
@@ -425,7 +425,7 @@ async def panic_sell_position(order_id: str, db: Session = Depends(get_db)):
     try:
         pos = db.query(Position).filter(Position.order_id == order_id).first()
         if not pos:
-            return {"success": False, "error": "Позиция не найдена в базе данных"}
+            return {"success": False, "error": "Position not found in database"}
 
         client = get_clob_client()
         token_id = pos.token_id
@@ -443,7 +443,7 @@ async def panic_sell_position(order_id: str, db: Session = Depends(get_db)):
                     await cancel_order(order_id)
                     pos.status = "CANCELED"
                     db.commit()
-                    return {"success": True, "message": "Отменено (покупок не было)."}
+                    return {"success": True, "message": "Canceled (no fills)."}
                 if matched > 0:
                     size_to_sell = matched
         except Exception as exc:
@@ -451,17 +451,17 @@ async def panic_sell_position(order_id: str, db: Session = Depends(get_db)):
                 pos.status = "RESOLVED"
                 pos.exit_price = 1.0
                 db.commit()
-                return {"success": True, "message": "Очищено (токен сгорел/рынок закрыт)."}
+                return {"success": True, "message": "Cleared (token resolved / market closed)."}
 
         try:
             for tp_id in _split_tp_ids(getattr(pos, "tp_order_id", None)):
-                logger.info("Отменяем Тейк-Профит %s для разблокировки баланса", tp_id)
+                logger.info("Canceling take-profit %s to free balance", tp_id)
                 await cancel_order(tp_id)
             if getattr(pos, "tp_order_id", None):
                 await asyncio.sleep(0.5)
 
         except Exception as exc:
-            logger.warning("Не удалось отменить ТП перед паникой: %s", exc)
+            logger.warning("Failed to cancel TP before panic sell: %s", exc)
 
         await asyncio.sleep(1.0)
 
@@ -475,27 +475,27 @@ async def panic_sell_position(order_id: str, db: Session = Depends(get_db)):
                 pos.exit_price = bid
                 db.commit()
                 order_audit.info(f"PANIC SELL EXECUTED | order_id={order_id} size_dumped={size_to_sell} exit_price={bid}")
-                return {"success": True, "message": "Сброшено по рынку!"}
+                return {"success": True, "message": "Dumped at market!"}
 
             if resp and is_resolved_error(str(resp)):
                 pos.status = "RESOLVED"
                 pos.exit_price = 1.0
                 db.commit()
-                return {"success": True, "message": "Очищено (рынок завершен)."}
+                return {"success": True, "message": "Cleared (market resolved)."}
 
         except Exception as exc:
             if is_resolved_error(str(exc)):
                 pos.status = "RESOLVED"
                 pos.exit_price = 1.0
                 db.commit()
-                return {"success": True, "message": "Очищено (продано вручную)."}
-            return {"success": False, "error": f"Ошибка Polymarket: {exc}"}
+                return {"success": True, "message": "Cleared (sold manually)."}
+            return {"success": False, "error": f"Polymarket error: {exc}"}
 
-        return {"success": False, "error": "Неизвестная ошибка при отправке ордера"}
+        return {"success": False, "error": "Unknown error while submitting order"}
 
     except Exception as exc:
         logger.exception("panic_sell failed")
-        return {"success": False, "error": f"Внутренняя ошибка сервера: {exc}"}
+        return {"success": False, "error": f"Internal server error: {exc}"}
 
 
 class ResolveRequest(BaseModel):
@@ -527,12 +527,12 @@ async def resolve_position(
     try:
         pos = db.query(Position).filter(Position.order_id == order_id).first()
         if not pos:
-            return {"success": False, "error": "Позиция не найдена в базе данных"}
+            return {"success": False, "error": "Position not found in database"}
 
         if pos.status not in ("OPEN", "PENDING"):
             return {
                 "success": False,
-                "error": f"Позиция уже закрыта (status={pos.status})",
+                "error": f"Position already closed (status={pos.status})",
             }
 
         # Cancel live TP legs if any (best-effort)
@@ -573,7 +573,7 @@ async def resolve_position(
     except Exception as exc:
         logger.exception("resolve_position failed")
         db.rollback()
-        return {"success": False, "error": f"Внутренняя ошибка сервера: {exc}"}
+        return {"success": False, "error": f"Internal server error: {exc}"}
 
 
 @router.get("/positions")

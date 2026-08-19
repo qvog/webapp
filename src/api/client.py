@@ -29,7 +29,7 @@ def get_clob_client() -> ClobClient:
         return _clob_client
 
     if not settings.poly_private_key or not settings.poly_funder_address:
-        raise ValueError("Не настроены POLY_PRIVATE_KEY / POLY_FUNDER_ADDRESS в .env")
+        raise ValueError("POLY_PRIVATE_KEY / POLY_FUNDER_ADDRESS are not configured in .env")
 
     _clob_client = ClobClient(
         host=settings.poly_host,

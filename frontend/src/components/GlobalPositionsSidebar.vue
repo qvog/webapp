@@ -89,46 +89,54 @@
           @click="openPosition(pos)"
           class="w-full text-left border border-zinc-800 rounded-xl bg-[#050505] p-3 hover:border-yellow-400/40 hover:bg-zinc-900/60 transition-colors cursor-pointer"
         >
-          <div class="flex items-start gap-2.5 min-w-0">
-            <img
-              v-if="meta(pos).image"
-              :src="meta(pos).image"
-              alt=""
-              class="w-6 h-6 rounded-full object-cover border border-zinc-800 shrink-0"
-            />
-            <div
-              v-else
-              class="w-6 h-6 rounded-full bg-zinc-900 border border-zinc-800 shrink-0"
-            />
-            <div class="min-w-0 flex-1">
-              <p
-                class="text-[11px] font-bold text-white leading-snug line-clamp-2"
-                :title="meta(pos).title || 'Unknown'"
-              >
-                {{ meta(pos).title || 'Unknown market' }}
-              </p>
-              <div class="flex items-center gap-1.5 mt-1 min-w-0">
-                <span
-                  class="inline-block w-1.5 h-1.5 rounded-full bg-yellow-400 shadow-[0_0_6px_#eab308] shrink-0"
+          <div class="flex flex-col gap-1.5 min-w-0">
+            <p
+              class="text-[11px] font-bold text-white leading-snug line-clamp-2"
+              :title="meta(pos).title || 'Unknown'"
+            >
+              {{ meta(pos).title || 'Unknown market' }}
+            </p>
+            <div class="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 min-w-0">
+              <div class="flex flex-col items-center gap-0.5 shrink-0 w-8">
+                <img
+                  v-if="meta(pos).image"
+                  :src="meta(pos).image"
+                  alt=""
+                  class="w-6 h-6 rounded-full object-cover border border-zinc-800"
                 />
-                <span class="text-[9px] font-mono text-yellow-400 shrink-0">
+                <div
+                  v-else
+                  class="w-6 h-6 rounded-full bg-zinc-900 border border-zinc-800"
+                />
+                <span class="flex items-center gap-0.5 text-[8px] font-mono text-yellow-400">
+                  <span class="inline-block w-1 h-1 rounded-full bg-yellow-400 shadow-[0_0_6px_#eab308]" />
                   {{ shortId(pos.order_id) }}
                 </span>
-                <span class="text-[9px] text-zinc-500 uppercase truncate">
-                  {{ meta(pos).teamName || '—' }}
+              </div>
+              <div
+                class="min-w-0 text-center text-[10px] font-bold text-zinc-200 uppercase truncate"
+                :title="meta(pos).teamName || '—'"
+              >
+                {{ meta(pos).teamName || '—' }}
+              </div>
+              <div class="flex flex-col items-end gap-0.5 shrink-0">
+                <span
+                  class="max-w-[72px] truncate text-[8px] px-1 py-0.5 rounded font-bold font-mono uppercase tracking-wider bg-zinc-800/80 text-zinc-400 border border-zinc-700/60"
+                  :title="formatStrategy(pos.strategy)"
+                >
+                  {{ formatStrategy(pos.strategy) }}
                 </span>
                 <span
                   v-if="pos.status === 'PENDING'"
-                  class="ml-auto shrink-0 text-[8px] px-1 py-0.5 rounded font-bold bg-yellow-500/10 text-yellow-500 border border-yellow-500/30 uppercase"
+                  class="text-[8px] px-1 py-0.5 rounded font-bold bg-yellow-500/10 text-yellow-500 border border-yellow-500/30 uppercase"
                 >
                   PEND
                 </span>
               </div>
-              <div class="flex justify-between mt-1.5 text-[9px] font-mono text-zinc-500">
-                <span>IN <b class="text-zinc-300">{{ Math.round(Number(pos.entry_price) * 100) }}¢</b></span>
-                <span>SZ <b class="text-zinc-300">{{ Number(pos.size).toFixed(1) }}</b></span>
-                <span class="uppercase text-zinc-600">{{ formatStrategy(pos.strategy) }}</span>
-              </div>
+            </div>
+            <div class="flex justify-between text-[9px] font-mono text-zinc-500">
+              <span>IN <b class="text-zinc-300">{{ Math.round(Number(pos.entry_price) * 100) }}¢</b></span>
+              <span>SZ <b class="text-zinc-300">{{ Number(pos.size).toFixed(1) }}</b></span>
             </div>
           </div>
         </button>

@@ -24,7 +24,7 @@ class TestValidateLimitPrice:
 
     @pytest.mark.parametrize("price", [0.0, 0.009, -0.01, 1.0, 0.991, 1.5, 100])
     def test_rejects_out_of_band(self, price: float) -> None:
-        with pytest.raises(ValueError, match="диапазона|range|вне"):
+        with pytest.raises(ValueError, match="range|outside|allowed"):
             validate_limit_price(price)
 
     def test_rejects_non_numeric(self) -> None:

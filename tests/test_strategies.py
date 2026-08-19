@@ -329,7 +329,7 @@ class TestManualResolve:
             assert resp.status_code == 200
             body = resp.json()
             assert body["success"] is False
-            assert "закрыта" in (body.get("error") or "").lower() or "status" in (
+            assert "already closed" in (body.get("error") or "").lower() or "status" in (
                 body.get("error") or ""
             ).lower()
         finally:

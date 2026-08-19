@@ -422,7 +422,7 @@ const executeUndoLastOrder = async () => {
 const executeFlatten = async () => {
   const tokenId = activeTokenId.value
   if (!tokenId) {
-    toast.warning('Нет активного токена для Flatten (F10)')
+    toast.warning('No active token for Flatten (F10)')
     return
   }
   try {
