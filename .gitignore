@@ -181,3 +181,8 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+Dockerfile
+frontend/Dockerfile
+frontend/nginx.conf 
+kind-config.yaml
