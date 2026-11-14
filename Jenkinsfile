@@ -1,61 +1,62 @@
 pipeline {
-    agent any // Пока запускаем прямо внутри контейнера Jenkins
+    agent any // Базовый агент для скачивания кода
 
     stages {
         stage('Checkout') {
             steps {
                 checkout scm
-                echo "Код скачан. Текущая ветка: ${env.BRANCH_NAME}"
             }
         }
         
         stage('Test Application') {
             parallel {
-                // ВЕТКА 1: БЭКЕНД
+                
+                // --- БЭКЕНД ---
                 stage('Test FastAPI (Backend)') {
+                    // Jenkins скачает этот образ и выполнит sh-скрипт внутри него
+                    agent {
+                        docker { 
+                            image 'python:3.11-slim'
+                            args '-u root:root' // Даем права, чтобы Jenkins мог создавать файлы
+                        }
+                    }
                     steps {
-                        // Если бэкенд в папке backend, раскомментируй dir:
+                        // Если твой FastAPI лежит в папке, раскомментируй dir:
                         // dir('backend') {
                         sh '''
-                            echo "--- Инициализация бэкенда ---"
                             python3 -m venv venv
                             . venv/bin/activate
                             pip install --upgrade pip
                             pip install -r requirements.txt
-                            # Запускаем тесты и генерируем отчет
                             pytest tests/ --junitxml=backend-test-results.xml
                         '''
                         // }
                     }
                     post {
                         always {
-                            // Собираем XML отчет о тестах, даже если они упали
-                            junit '**/backend-test-results.xml'
+                            // allowEmptyResults спасет от страшной ошибки, если pytest не отработал
+                            junit testResults: '**/backend-test-results.xml', allowEmptyResults: true
                         }
                     }
                 }
                 
-                // ВЕТКА 2: ФРОНТЕНД
+                // --- ФРОНТЕНД ---
                 stage('Test Vue (Frontend)') {
+                    agent {
+                        docker { 
+                            image 'node:20-alpine'
+                            args '-u root:root'
+                        }
+                    }
                     steps {
-                        // Если фронтенд в папке frontend, раскомментируй dir:
                         // dir('frontend') {
                         sh '''
-                            echo "--- Поднимаем фронтенд ---"
-                            # Чистая установка зависимостей для CI
                             npm ci
-                            # Запуск линтера (проверка качества кода)
-                            npm run lint || echo "Линтер ругается, но идем дальше"
+                            npm run lint || echo "Игнорируем ошибки линтера"
                         '''
                         // }
                     }
                 }
-            }
-        }
-
-        stage('Build Docker Images') {
-            steps {
-                echo "Заглушка для сборки Docker..."
             }
         }
     }
@@ -63,7 +64,6 @@ pipeline {
     post {
         always {
             cleanWs()
-            echo "Рабочая директория очищена."
         }
     }
 }
