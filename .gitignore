@@ -182,7 +182,4 @@ dist-ssr
 *.sln
 *.sw?
 
-Dockerfile
-frontend/Dockerfile
-frontend/nginx.conf 
 kind-config.yaml
