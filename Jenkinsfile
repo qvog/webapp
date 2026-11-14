@@ -49,12 +49,12 @@ pipeline {
                         }
                     }
                     steps {
-                        // dir('frontend') {
-                        sh '''
-                            npm ci
-                            npm run lint || echo "Игнорируем ошибки линтера"
-                        '''
-                        // }
+                        dir('frontend') {
+                            sh '''
+                                npm ci
+                                npm run lint || echo "Игнорируем ошибки линтера"
+                            '''
+                        }
                     }
                 }
             }
