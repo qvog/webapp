@@ -1,5 +1,5 @@
 pipeline {
-    agent any // Базовый агент для скачивания кода
+    agent any // Базовый агент для скачивания кода и запуска финальной сборки (у него есть Docker)
 
     stages {
         stage('Checkout') {
@@ -13,16 +13,13 @@ pipeline {
                 
                 // --- БЭКЕНД ---
                 stage('Test FastAPI (Backend)') {
-                    // Jenkins скачает этот образ и выполнит sh-скрипт внутри него
                     agent {
                         docker { 
                             image 'python:3.11-slim'
-                            args '-u root:root' // Даем права, чтобы Jenkins мог создавать файлы
+                            args '-u root:root'
                         }
                     }
                     steps {
-                        // Если твой FastAPI лежит в папке, раскомментируй dir:
-                        // dir('backend') {
                         sh '''
                             python3 -m venv venv
                             . venv/bin/activate
@@ -30,11 +27,9 @@ pipeline {
                             pip install -r requirements.txt
                             pytest tests/ --junitxml=backend-test-results.xml
                         '''
-                        // }
                     }
                     post {
                         always {
-                            // allowEmptyResults спасет от страшной ошибки, если pytest не отработал
                             junit testResults: '**/backend-test-results.xml', allowEmptyResults: true
                         }
                     }
@@ -59,8 +54,28 @@ pipeline {
                 }
             }
         }
+
+        // --- НОВЫЙ ЭТАП: СБОРКА ОБРАЗОВ ---
+        stage('Build Docker Images') {
+            steps {
+                echo "Начинаем сборку. Уникальный номер билда: ${env.BUILD_NUMBER}"
+                
+                // Сборка бэкенда (контекст - текущая папка ".")
+                sh '''
+                    echo "--- Собираем FastAPI ---"
+                    docker build -t qvog/webapp-backend:v${BUILD_NUMBER} -t qvog/webapp-backend:latest .
+                '''
+                
+                // Сборка фронтенда (контекст - папка "frontend")
+                sh '''
+                    echo "--- Собираем Vue + Nginx ---"
+                    docker build -t qvog/webapp-frontend:v${BUILD_NUMBER} -t qvog/webapp-frontend:latest ./frontend
+                '''
+            }
+        }
     }
 
+    // Блок гигиены
     post {
         always {
             cleanWs()
