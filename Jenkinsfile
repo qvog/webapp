@@ -1,6 +1,6 @@
 pipeline {
     agent {
-        label 'docker'
+        label 'test-build'
     }
 
     stages {
@@ -76,6 +76,14 @@ pipeline {
     }
 
     post {
+        success {
+            echo "OK"
+        }
+        failure {
+            echo "NOT OK"
+            // Сохраняем XML-отчеты падающих тестов до того, как workspace будет очищен
+            archiveArtifacts artifacts: '**/*.xml', allowEmptyArchive: true
+        }
         always {
             cleanWs()
         }
