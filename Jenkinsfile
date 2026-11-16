@@ -64,13 +64,11 @@ pipeline {
                 
                 // Сборка бэка
                 sh '''
-                    echo "--- Собираем FastAPI ---"
                     docker build -t qvog/webapp-backend:v${BUILD_NUMBER} -t qvog/webapp-backend:latest .
                 '''
                 
                 // Сборка фронта
                 sh '''
-                    echo "--- Собираем Vue + Nginx ---"
                     docker build -t qvog/webapp-frontend:v${BUILD_NUMBER} -t qvog/webapp-frontend:latest ./frontend
                 '''
             }
