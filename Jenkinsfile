@@ -1,5 +1,7 @@
 pipeline {
-    agent any // Базовый агент для скачивания кода и запуска финальной сборки (у него есть Docker)
+    agent {
+        label 'docker'
+    }
 
     stages {
         stage('Checkout') {
@@ -11,7 +13,7 @@ pipeline {
         stage('Test Application') {
             parallel {
                 
-                // --- БЭКЕНД ---
+                //БЭКЕНД
                 stage('Test FastAPI (Backend)') {
                     agent {
                         docker { 
@@ -35,7 +37,7 @@ pipeline {
                     }
                 }
                 
-                // --- ФРОНТЕНД ---
+                //ФРОНТ
                 stage('Test Vue (Frontend)') {
                     agent {
                         docker { 
@@ -55,18 +57,18 @@ pipeline {
             }
         }
 
-        // --- НОВЫЙ ЭТАП: СБОРКА ОБРАЗОВ ---
+        //СБОРКА ОБРАЗОВ
         stage('Build Docker Images') {
             steps {
                 echo "Начинаем сборку. Уникальный номер билда: ${env.BUILD_NUMBER}"
                 
-                // Сборка бэкенда (контекст - текущая папка ".")
+                // Сборка бэка
                 sh '''
                     echo "--- Собираем FastAPI ---"
                     docker build -t qvog/webapp-backend:v${BUILD_NUMBER} -t qvog/webapp-backend:latest .
                 '''
                 
-                // Сборка фронтенда (контекст - папка "frontend")
+                // Сборка фронта
                 sh '''
                     echo "--- Собираем Vue + Nginx ---"
                     docker build -t qvog/webapp-frontend:v${BUILD_NUMBER} -t qvog/webapp-frontend:latest ./frontend
@@ -75,7 +77,6 @@ pipeline {
         }
     }
 
-    // Блок гигиены
     post {
         always {
             cleanWs()
